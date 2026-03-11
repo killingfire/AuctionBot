@@ -102,7 +102,7 @@ def _premium_line(label: str, with_prices: list[float], without_prices: list[flo
 # CORE PRICE ANALYSIS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _analyse(query: dict, filters_str: str) -> discord.ui.LayoutView:
+def _analyse(query: dict, filters_str: str, limit: int | None = None) -> discord.ui.LayoutView:
     """
     Run price analysis for the given query.
     Steps:
@@ -138,10 +138,13 @@ def _analyse(query: dict, filters_str: str) -> discord.ui.LayoutView:
     is_gmax  = query.get("gx") is True
 
     # ── Pull all base records (for premium calculations) ──────────────────────
-    base_records = list(_col.find(base_query, {
+    _base_cur = _col.find(base_query, {
         "bid": 1, "iv": 1, "lv": 1, "spe": 1, "atk": 1,
         "mv": 1, "gen": 1, "sh": 1, "gx": 1, "ts": 1, "aid": 1,
-    }))
+    }).sort("ts", -1)
+    if limit is not None:
+        _base_cur = _base_cur.limit(limit)
+    base_records = list(_base_cur)
 
     if not base_records:
         return _error_view(f"❌ No past sales found for **{name}**.")
@@ -166,17 +169,23 @@ def _analyse(query: dict, filters_str: str) -> discord.ui.LayoutView:
         lo = iv_target - IV_BAND
         hi = iv_target + IV_BAND
         comp_query = {**base_query, "iv": {"$gte": lo, "$lte": hi}}
-        comp_records = list(_col.find(comp_query, {
+        _comp_cur = _col.find(comp_query, {
             "bid": 1, "iv": 1, "lv": 1, "spe": 1, "atk": 1,
             "mv": 1, "gen": 1, "sh": 1, "gx": 1, "ts": 1, "aid": 1,
-        }))
+        }).sort("ts", -1)
+        if limit is not None:
+            _comp_cur = _comp_cur.limit(limit)
+        comp_records = list(_comp_cur)
         if len(comp_records) < 3:
             comp_records = base_records  # fall back if band is too narrow
 
     comp_prices = _prices(comp_records)
 
     # ── Exact-match records (full user query) ─────────────────────────────────
-    exact_records = list(_col.find(query, {"bid": 1, "ts": 1, "aid": 1, "iv": 1}))
+    _exact_cur = _col.find(query, {"bid": 1, "ts": 1, "aid": 1, "iv": 1}).sort("ts", -1)
+    if limit is not None:
+        _exact_cur = _exact_cur.limit(limit)
+    exact_records = list(_exact_cur)
     exact_prices  = _prices(exact_records)
 
     # ── Stats ─────────────────────────────────────────────────────────────────
@@ -281,12 +290,13 @@ def _analyse(query: dict, filters_str: str) -> discord.ui.LayoutView:
     gmax_tag  = "⚡ Gmax " if is_gmax else ""
     title     = f"## 💰 Price Check — {shiny_tag}{gmax_tag}{name}"
 
-    iv_range_s = ""
+    iv_range_s  = ""
     if iv_target is not None:
         iv_range_s = f"  •  IV ~{iv_target:.1f}% (±{IV_BAND}%)"
+    limit_note  = f"  •  last {limit:,}" if limit is not None else ""
 
     stats_text = (
-        f"**📊 Price Stats** — _{use_label}, {n} sales{iv_range_s}_\n"
+        f"**📊 Price Stats** — _{use_label}, {n} sales{iv_range_s}{limit_note}_\n"
         f"{REPLY} **Median:** `{_fmt(p_median)}`  ← best single reference\n"
         f"{REPLY} **Average:** `{_fmt(p_avg)}`\n"
         f"{REPLY} **Range:** `{_fmt(p_min)}` – `{_fmt(p_max)}`\n"
@@ -348,7 +358,7 @@ class Price(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.hybrid_command(name="price", aliases=["p", "pricecheck"])
+    @commands.hybrid_command(name="price", aliases=["pc", "pricecheck"])
     @app_commands.describe(filters="Same filters as auction search e.g: --name eevee --shiny --iv >85")
     async def price_cmd(self, ctx: commands.Context, *, filters: str = ""):
         """
@@ -372,11 +382,11 @@ class Price(commands.Cog):
             )
             return
 
-        raw         = filters.split() if filters else []
-        query, _, _ = build_query(raw, expand_name_by_dex=True)
+        raw              = filters.split() if filters else []
+        query, _, limit  = build_query(raw, expand_name_by_dex=True)
 
         async with ctx.typing():
-            view = _analyse(query, filters)
+            view = _analyse(query, filters, limit=limit)
 
         await ctx.send(view=view, reference=ctx.message, mention_author=False)
 
