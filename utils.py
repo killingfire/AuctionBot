@@ -600,21 +600,8 @@ def _resolve_exclude_names(val: str, expand_name_by_dex: bool) -> set[str]:
     if resolved:
         return {resolved}
 
-    # Fuzzy substring fallback
-    norm_words = normalize(val).split()
-    name_db    = get_name_db()
-    matches: set[str] = {
-        canonical_name
-        for norm_key, canonical_name in name_db._map.items()
-        if all(w in norm_key for w in norm_words)
-    }
-    if matches and expand_name_by_dex:
-        expanded: set[str] = set()
-        for m in matches:
-            expanded.update(get_forms_db().resolve_name_to_forms(m) or {m})
-        return expanded
-
-    return matches
+    # No match found — return empty set
+    return set()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -819,17 +806,6 @@ def build_query(
                     resolved = resolve_pokemon_name(val_stripped)
                     if resolved:
                         _pool_add({resolved})
-                    else:
-                        # Fallback: substring search but NO form expansion
-                        norm_words = normalize(val_stripped).split()
-                        name_db    = get_name_db()
-                        matches: set[str] = {
-                            canonical_name
-                            for norm_key, canonical_name in name_db._map.items()
-                            if all(w in norm_key for w in norm_words)
-                        }
-                        if matches:
-                            _pool_add(matches)
                 else:
                     # ── FormsDB-based expansion (default) ────────────────────
                     # 1. Try FormsDB first (handles base names and exact form names)
@@ -837,36 +813,16 @@ def build_query(
                     if forms_result:
                         _pool_add(forms_result)
                     else:
-                        # 2. Fallback: normalised substring search across all known names
-                        norm_words = normalize(val_stripped).split()
-                        name_db    = get_name_db()
-                        matches = {
-                            canonical_name
-                            for norm_key, canonical_name in name_db._map.items()
-                            if all(w in norm_key for w in norm_words)
-                        }
-                        if matches:
-                            # Expand each substring match through FormsDB too
-                            expanded: set[str] = set()
-                            for m in matches:
-                                sub_forms = get_forms_db().resolve_name_to_forms(m)
-                                expanded.update(sub_forms if sub_forms else {m})
-                            _pool_add(expanded)
+                        # 2. Fallback: try exact name resolution, then expand through FormsDB
+                        resolved = resolve_pokemon_name(val_stripped)
+                        if resolved:
+                            sub_forms = get_forms_db().resolve_name_to_forms(resolved)
+                            _pool_add(sub_forms if sub_forms else {resolved})
             else:
                 # ── Original single-name resolution (non-auction cogs) ────────
                 resolved = resolve_pokemon_name(val)
                 if resolved:
                     _pool_add({resolved})
-                else:
-                    norm_words = normalize(val).split()
-                    name_db    = get_name_db()
-                    matches = {
-                        canonical_name
-                        for norm_key, canonical_name in name_db._map.items()
-                        if all(w in norm_key for w in norm_words)
-                    }
-                    if matches:
-                        _pool_add(matches)
             continue
 
         # ── Nature ────────────────────────────────────────────────────────────
