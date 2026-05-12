@@ -7,7 +7,7 @@ MONGO_URI       = os.getenv("MONGO_URI")
 MONGO_DB_NAME   = os.getenv("MONGO_DB_NAME", "poketwo")
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "auctions")
 
-COMMAND_PREFIX  = ["j!", "J!","a!", "A!","n!", "N!" ,"M!","m!" ]
+COMMAND_PREFIX  = ["n!", "N!","a!", "A!"]
 
 # ─── Pagination ───────────────────────────────────────────────────────────────
 RESULTS_PER_PAGE = 10
