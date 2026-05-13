@@ -1263,25 +1263,52 @@ class Stats(commands.Cog):
 
     @commands.hybrid_command(name="auction_stats", aliases=["stats"])
     @app_commands.describe(user="User to look up (leave empty for yourself)")
-    async def stats_cmd(self, ctx: commands.Context,
-                        user: discord.Member | discord.User | None = None):
+    async def stats_cmd(self, ctx: commands.Context, *, user: str | None = None):
         """Show detailed auction stats for a user"""
-        target = user or ctx.author
+        target: discord.User | discord.Member | None = None
+
+        if user is not None:
+            # strip mention formatting if present: <@123> or <@!123>
+            raw = user.strip().lstrip("<@!").rstrip(">")
+            if raw.isdigit():
+                uid = int(raw)
+                target = ctx.guild.get_member(uid) if ctx.guild else None
+                if target is None:
+                    try:
+                        target = await self.bot.fetch_user(uid)
+                    except discord.NotFound:
+                        await ctx.reply(
+                            view=_error_view("❌ No user found with that ID."),
+                            mention_author=False,
+                        )
+                        return
+                    except discord.HTTPException:
+                        await ctx.reply(
+                            view=_error_view("❌ Something went wrong while looking up that user."),
+                            mention_author=False,
+                        )
+                        return
+            else:
+                # treat as a username/display name — search guild members
+                if ctx.guild:
+                    target = discord.utils.find(
+                        lambda m: m.name.lower() == raw.lower() or m.display_name.lower() == raw.lower(),
+                        ctx.guild.members,
+                    )
+                if target is None:
+                    await ctx.reply(
+                        view=_error_view(f"❌ No user found matching `{raw}`."),
+                        mention_author=False,
+                    )
+                    return
+
+        if target is None:
+            target = ctx.author
+
         async with ctx.typing():
             data = await _fetch_user_data(target.id)
             view = _build_user_stats_view(target, data=data)
         await ctx.reply(view=view, mention_author=False)
-
-    @stats_cmd.error
-    async def stats_cmd_error(self, ctx: commands.Context, error: commands.CommandError):
-        if isinstance(error, commands.BadArgument):
-            await ctx.reply(
-                view=_error_view("❌ User not found. Please mention a valid user or provide a correct ID."),
-                mention_author=False,
-            )
-        else:
-            log.exception("Unexpected error in stats_cmd", exc_info=error)
-            await ctx.reply(view=_error_view("❌ Something went wrong."), mention_author=False)
 
     @commands.hybrid_command(name="lb", aliases=["leaderboard"])
     @app_commands.describe(
