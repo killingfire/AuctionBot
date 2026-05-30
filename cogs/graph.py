@@ -26,7 +26,7 @@ from pymongo import MongoClient
 import config
 from config import REPLY
 from utils import build_query, resolve_pokemon_name, shiny_prefix
-from filters import FLAG_DEFINITIONS
+from filters import FLAG_DEFINITIONS, all_flags_help
 
 # ─── DB ───────────────────────────────────────────────────────────────────────
 _mongo = MongoClient(config.MONGO_URI)
@@ -533,6 +533,14 @@ class Graph(commands.Cog):
         file = discord.File(buf, filename="graph.png")
         ref  = ctx.message if not (hasattr(ctx, "interaction") and ctx.interaction) else None
 
+        # Build filter reference lines dynamically from filters.py so they stay in sync
+        _filter_lines: list[str] = []
+        for _f in all_flags_help():
+            _arg_s   = " <value>" if _f["takes_arg"] else ""
+            _aliases = ", ".join(_f["aliases"][:3]) if _f.get("aliases") else ""
+            _alias_s = f"  _({_aliases})_" if _aliases else ""
+            _filter_lines.append(f"{REPLY} `{_f['flag']}{_arg_s}` — {_f['help']}{_alias_s}")
+
         legend_text = (
             f"**📖 Reading the Graph**\n"
             f"{REPLY} **Dots** — every individual auction sale, plotted by date and price\n"
@@ -549,7 +557,10 @@ class Graph(commands.Cog):
             f"{REPLY} **Trend** — average price change per sale (▲ rising, ▼ falling)\n"
             f"{REPLY} **Outliers** — sales so far above the typical price range that they would squash all other data on the chart. Excluded from the graph and most stats, but listed separately below\n"
             f"{REPLY} **Chart Max** — highest sale visible on the graph (outliers excluded); what the market realistically peaks at\n"
-            f"{REPLY} **All-time Max** — the absolute highest sale ever recorded, including outliers"
+            f"{REPLY} **All-time Max** — the absolute highest sale ever recorded, including outliers\n\n"
+            f"**🔍 Available Filters**\n"
+            f"-# Use these with `j!g` — e.g. `j!g --name pikachu --shiny --iv >90`\n"
+            + "\n".join(_filter_lines)
         )
 
         if outliers:
