@@ -31,10 +31,17 @@ from pymongo import MongoClient
 import config
 from config import get_gender_emoji, REPLY
 from filters import all_flags_help
+from filters import FLAG_DEFINITIONS
 from utils import (
     build_query, format_date, iv_line,
     format_winning_bid, format_winning_bid_long,
     shiny_prefix, get_pokemon_image_url,
+    resolve_pokemon_name, get_forms_db,
+)
+
+# ─── Name flag aliases (derived from filters.py — stays in sync automatically) ─
+_NAME_FLAGS: frozenset[str] = frozenset(
+    ["--name"] + FLAG_DEFINITIONS["--name"].get("aliases", [])
 )
 
 # ─── DB connection ─────────────────────────────────────────────────────────────
@@ -436,7 +443,43 @@ class Auction(commands.Cog):
     @app_commands.describe(filters="Filters e.g: --name pikachu --shiny --iv >90 --sort price")
     async def auction_search(self, ctx: commands.Context, *, filters: str = ""):
         """Search past auctions with filters"""
-        raw                  = filters.split() if filters else []
+        raw = filters.split() if filters else []
+
+        # ── Validate --name values before building the query ──────────────────
+        # Walk tokens, collect every value that follows a --name flag, and check
+        # it resolves to a known Pokémon.  Unknown names get an immediate error.
+        i = 0
+        while i < len(raw):
+            tok = raw[i]
+            if tok.lower() in _NAME_FLAGS:
+                # Consume the value tokens (everything until the next flag)
+                i += 1
+                name_parts: list[str] = []
+                while i < len(raw) and not raw[i].startswith("-"):
+                    name_parts.append(raw[i])
+                    i += 1
+                name_val = " ".join(name_parts).strip()
+                # Strip trailing "only" keyword that build_query handles
+                check_val = name_val
+                if check_val.lower().endswith(" only"):
+                    check_val = check_val[:-5].strip()
+                if check_val:
+                    # Valid if FormsDB knows it OR the name DB resolves it
+                    forms_hit = bool(get_forms_db().resolve_name_to_forms(check_val))
+                    name_hit  = bool(resolve_pokemon_name(check_val))
+                    if not forms_hit and not name_hit:
+                        await ctx.send(
+                            view=_error_view(
+                                f"❌ **{check_val}** is not a Pokémon name.\n"
+                                f"{config.REPLY} Check the spelling or try the English name."
+                            ),
+                            reference=ctx.message,
+                            mention_author=False,
+                        )
+                        return
+            else:
+                i += 1
+
         # expand_name_by_dex=True: --name bulbasaur matches all Bulbasaur dex-number forms
         query, sort, limit   = build_query(raw, expand_name_by_dex=True)
         total                = _col.count_documents(query)
