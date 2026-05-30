@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 import logging
+from collections import OrderedDict
 
 import discord
 from discord.ext import commands
@@ -233,9 +234,10 @@ class TradeEvoWarn(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # message_id → set of "trader:pokemon" keys already warned about
-        # Prevents duplicate spam when a trade message is edited multiple times
-        self._warned: dict[int, set[str]] = {}
+        # message_id → set of "trader:pokemon" keys already warned about.
+        # Capped at 500 entries (oldest evicted first) to prevent unbounded growth.
+        self._warned: OrderedDict[int, set[str]] = OrderedDict()
+        self._WARNED_MAX = 500
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -266,7 +268,11 @@ class TradeEvoWarn(commands.Cog):
             return
 
         # Retrieve (or create) the already-warned set for this message
-        already_warned = self._warned.setdefault(message.id, set())
+        if message.id not in self._warned:
+            if len(self._warned) >= self._WARNED_MAX:
+                self._warned.popitem(last=False)  # evict oldest
+            self._warned[message.id] = set()
+        already_warned = self._warned[message.id]
 
         view = _build_warning_view(found, already_warned)
         if view is None:
