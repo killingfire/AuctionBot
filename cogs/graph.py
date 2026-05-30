@@ -582,7 +582,7 @@ class Graph(commands.Cog):
                     accent_colour=discord.Colour(0xf04747),
                 )
                 def __init__(self):
-                    super().__init__(timeout=None)
+                    super().__init__(timeout=300)
 
             await ctx.send(
                 view=CombinedView(),
@@ -604,7 +604,7 @@ class Graph(commands.Cog):
                     accent_colour=accent,
                 )
                 def __init__(self):
-                    super().__init__(timeout=None)
+                    super().__init__(timeout=300)
 
             await ctx.send(
                 view=GraphView(),
