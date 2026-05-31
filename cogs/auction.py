@@ -290,8 +290,9 @@ def create_search_view(
                 await interaction.response.send_message(
                     view=_error_view("❌ Not your search!"), ephemeral=True)
                 return
-            await interaction.response.edit_message(
-                view=create_search_view(user_id, query, sort, total, query_str, current_page - 1, limit))
+            await interaction.response.defer()
+            new_view = create_search_view(user_id, query, sort, total, query_str, current_page - 1, limit)
+            await interaction.edit_original_response(view=new_view)
 
     class NextBtn(discord.ui.Button):
         def __init__(self):
@@ -306,8 +307,9 @@ def create_search_view(
                 await interaction.response.send_message(
                     view=_error_view("❌ Not your search!"), ephemeral=True)
                 return
-            await interaction.response.edit_message(
-                view=create_search_view(user_id, query, sort, total, query_str, current_page + 1, limit, raw_tokens))
+            await interaction.response.defer()
+            new_view = create_search_view(user_id, query, sort, total, query_str, current_page + 1, limit, raw_tokens)
+            await interaction.edit_original_response(view=new_view)
 
     # ── Helper: rebuild view with modified token list ──────────────────────────
     _tokens = raw_tokens or []
@@ -408,11 +410,12 @@ def create_search_view(
                 await interaction.response.send_message(
                     view=_error_view("❌ Not your search!"), ephemeral=True)
                 return
+            await interaction.response.defer()
             if _noshiny_active:
                 new_tokens = _remove_flag(list(_tokens), *_NOSHINY_FLAGS)
             else:
                 new_tokens = _add_flag(list(_tokens), "--noshiny")
-            await interaction.response.edit_message(view=_rebuild_view(new_tokens))
+            await interaction.edit_original_response(view=_rebuild_view(new_tokens))
 
     class ExcludeGmaxBtn(discord.ui.Button):
         def __init__(self):
@@ -427,11 +430,12 @@ def create_search_view(
                 await interaction.response.send_message(
                     view=_error_view("❌ Not your search!"), ephemeral=True)
                 return
+            await interaction.response.defer()
             if _nogmax_active:
                 new_tokens = _remove_flag(list(_tokens), *_NOGMAX_FLAGS)
             else:
                 new_tokens = _add_flag(list(_tokens), "--nogmax")
-            await interaction.response.edit_message(view=_rebuild_view(new_tokens))
+            await interaction.edit_original_response(view=_rebuild_view(new_tokens))
 
     class ExcludeEventBtn(discord.ui.Button):
         def __init__(self):
@@ -446,6 +450,7 @@ def create_search_view(
                 await interaction.response.send_message(
                     view=_error_view("❌ Not your search!"), ephemeral=True)
                 return
+            await interaction.response.defer()
             if _no_event_active:
                 # Remove the "--ex category event" triplet
                 result, i = [], 0
@@ -462,7 +467,7 @@ def create_search_view(
                 new_tokens = result
             else:
                 new_tokens = list(_tokens) + ["--ex", "category", "event"]
-            await interaction.response.edit_message(view=_rebuild_view(new_tokens))
+            await interaction.edit_original_response(view=_rebuild_view(new_tokens))
 
     # Shiny check: only True (not {"$ne": True}) means shiny search
     accent    = config.SHINY_EMBED_COLOR if query.get("sh") is True else config.EMBED_COLOR
