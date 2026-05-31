@@ -1260,7 +1260,7 @@ class Graph(commands.Cog):
             f"{REPLY} `--region <value>` — Region e.g. `kanto`, `galar`  _(--r)_\n"
             f"{REPLY} `--evo <value>` — Entire evo family  _(--family)_\n"
             f"{REPLY} `--category <value>` — Category e.g. `rares`, `starters`  _(--cat)_\n"
-            f"{REPLY} `--exclude <value>` — Exclude by name/type/region/category  _(--ex)_\n"
+            f"{REPLY} `--exclude <kind> <value>` — Exclude by name/type/region/category --ex type fire, --ex name alolan meowth, --ex category event/rare/regional/leg/my/ub/hisui/paldean/starters  _(--ex)_\n"
             f"{REPLY} `--price <value>` — Price filter e.g. `>5000`, `500-5000`  _(--p, --bid)_\n"
             f"{REPLY} `--limit <value>` — Limit to N most recent matches  _(--lim, --top)_\n"
             f"{REPLY} `--sort <value>` — Sort by `iv`, `bid`, `level`, `date`, `id` (append `+`/`-`)  _(--order)_\n"
