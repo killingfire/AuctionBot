@@ -438,6 +438,10 @@ def build_compare_graph(
         color=GRID_COLOR, linewidth=0.8,
     ))
 
+    # Ensure top margin is tall enough for the title and the top y-tick label,
+    # and add a small left margin so the y-axis label isn't cropped.
+    fig.subplots_adjust(top=0.91, left=0.09, right=0.97, bottom=0.02)
+
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=130, bbox_inches="tight",
                 facecolor=BG_DARK, edgecolor="none")
@@ -596,24 +600,37 @@ def build_graph(
 
     idx_max = int(np.argmax(prices_plot))
     idx_min = int(np.argmin(prices_plot))
-    # If max/min land near the same x position, flip one annotation to the other side
-    _same_x = abs(idx_max - idx_min) < max(1, len(prices_plot) // 20)
-    for idx, label, color, _default_yoff in [
-        (idx_max, f"Max\n{_format_price(prices_plot.max())}", pal.get("trend_up", "#06d6a0"),  16),
-        (idx_min, f"Min\n{_format_price(prices_plot.min())}", pal.get("trend_down", "#ef476f"), -28),
-    ]:
-        _yoff = _default_yoff
-        if _same_x and idx == idx_min:
-            _yoff = -44  # push min annotation further down to avoid overlap
+
+    _y_lo, _y_hi = prices_plot.min(), prices_plot.max()
+    _y_span = _y_hi - _y_lo or 1
+
+    def _annotate_point(idx, label, color, prefer_above: bool):
+        """Place annotation above or below based on where the point sits in the chart."""
+        val = prices_plot[idx]
+        # Fraction of the way up the y-range (0 = bottom, 1 = top)
+        rel = (val - _y_lo) / _y_span
+        # If point is in top 30% of chart, label goes below to avoid title clip
+        if rel > 0.70:
+            yoff, va = -32, "top"
+        # If point is in bottom 30%, label goes above
+        elif rel < 0.30:
+            yoff, va = 22, "bottom"
+        else:
+            yoff, va = (20, "bottom") if prefer_above else (-28, "top")
         ax.annotate(
             label,
-            xy=(dates_plot[idx], prices_plot[idx]),
-            xytext=(20, _yoff),
+            xy=(dates_plot[idx], val),
+            xytext=(0, yoff),
             textcoords="offset points",
-            ha="center", va="bottom",
+            ha="center", va=va,
             color=color, fontsize=8, fontweight="bold",
-            arrowprops=dict(arrowstyle="-", color=color, lw=1),
+            arrowprops=dict(arrowstyle="-", color=color, lw=1.2),
         )
+
+    _annotate_point(idx_max, f"Max\n{_format_price(prices_plot.max())}",
+                    pal.get("trend_up",   "#06d6a0"), prefer_above=True)
+    _annotate_point(idx_min, f"Min\n{_format_price(prices_plot.min())}",
+                    pal.get("trend_down", "#ef476f"), prefer_above=False)
 
     # ── X-axis: two-level labels — months on first row, year on second row ─────
     # Major ticks show short month name. On January ticks (and the first visible
@@ -719,9 +736,10 @@ def build_graph(
     ax.legend(
         facecolor=BG_DARK, edgecolor=GRID_COLOR,
         labelcolor=TEXT_COLOR, fontsize=8,
-        loc="upper left",
-        borderpad=0.6,
+        loc="lower left",
+        borderpad=0.7,
         handlelength=1.5,
+        framealpha=0.85,
     )
 
     stats_items = [
@@ -1401,7 +1419,7 @@ class Graph(commands.Cog):
                     else:
                         # currently clean → button offers raw mode
                         _style = discord.ButtonStyle.secondary
-                        _label = "⚠️ Include Outliers too"
+                        _label = "⚠️ Show Outliers (Raw Data)"
                     super().__init__(style=_style, label=_label, custom_id="g_outliers_toggle")
                 async def callback(self, interaction: discord.Interaction):
                     await regenerate_fn(interaction, _is_alltime_cap, not _is_outliers_cap)
