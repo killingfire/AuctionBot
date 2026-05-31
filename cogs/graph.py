@@ -558,10 +558,9 @@ def build_graph(
     trend_line = slope * x_num + intercept
 
     fig = plt.figure(figsize=(12, 7.8), facecolor=BG_DARK)
-    # height_ratios=[5,1]: main chart vs stats bar.
-    # hspace=0.35 gives enough room for the two-line x-axis labels (Mon\nYYYY)
-    # without colliding with the stats panel below.
-    gs  = fig.add_gridspec(2, 1, height_ratios=[5, 1], hspace=0.35)
+    # height_ratios=[5.5, 1.2]: slightly taller chart, compact stats panel that
+    # fits two-row paired stats + manually drawn legend side by side.
+    gs  = fig.add_gridspec(2, 1, height_ratios=[5.5, 1.2], hspace=0.18)
     ax  = fig.add_subplot(gs[0])
     axs = fig.add_subplot(gs[1])
 
@@ -733,37 +732,77 @@ def build_graph(
     # Filter string is already shown in the Discord message subtitle — no need
     # to repeat it as an xlabel which would collide with the x-axis tick labels.
 
-    ax.legend(
-        facecolor=BG_DARK, edgecolor=GRID_COLOR,
-        labelcolor=TEXT_COLOR, fontsize=8,
-        loc="lower left",
-        borderpad=0.7,
+    # ── Legend: placed inside axs on the left, using the real handles from ax ─
+    legend_handles, legend_labels = ax.get_legend_handles_labels()
+    if ax.get_legend():
+        ax.get_legend().remove()
+
+    axs_legend = axs.legend(
+        legend_handles, legend_labels,
+        loc="center left",
+        bbox_to_anchor=(0.0, 0.5),
+        facecolor=BG_CARD,
+        edgecolor=GRID_COLOR,
+        labelcolor=TEXT_COLOR,
+        fontsize=7.5,
+        borderpad=0.6,
         handlelength=1.5,
-        framealpha=0.85,
+        handletextpad=0.5,
+        framealpha=1.0,
+        borderaxespad=0.0,
     )
 
-    stats_items = [
-        ("Auctions",  f"{total:,}"),
-        ("Min",       _format_price(p_min)),
-        ("Max",       _format_price(p_max)),
-        ("Avg",       _format_price(p_avg)),
-        ("Median",    _format_price(p_med)),
-        ("Std Dev",   _format_price(p_std)),
-        ("Trend",     f"{trend_arrow} {_format_price(abs(slope))}/sale"),
-        ("Outliers",  "All shown" if show_outliers else (f"{n_outliers} hidden" if n_outliers else "None")),
+    # ── Stats columns: right of the legend ───────────────────────────────────
+    # We don't know the legend width in advance, so we fix it at 27% of axs.
+    LEG_FRAC = 0.27
+    S0    = LEG_FRAC + 0.015
+    S1    = 1.0
+    col_w = (S1 - S0) / 6
+
+    paired_cols = [
+        ("Min",      _format_price(p_min),  "Max",    _format_price(p_max)),
+        ("Avg",      _format_price(p_avg),  "Median", _format_price(p_med)),
+        ("Auctions", f"{total:,}",          None,     None),
+        ("Std Dev",  _format_price(p_std),  None,     None),
+        ("Trend",    f"{trend_arrow} {_format_price(abs(slope))}/sale", None, None),
+        ("Outliers", "All shown" if show_outliers else (f"{n_outliers} hidden" if n_outliers else "None"), None, None),
     ]
 
-    step_x = 1.0 / len(stats_items)
-    for i, (label, value) in enumerate(stats_items):
-        x = i * step_x + step_x * 0.5
-        axs.text(x, 0.72, label, ha="center", va="center",
-                 color=MUTED_COLOR, fontsize=7.5, transform=axs.transAxes)
-        axs.text(x, 0.22, value, ha="center", va="center",
-                 color=TEXT_COLOR, fontsize=9, fontweight="bold",
-                 transform=axs.transAxes)
+    # y-coords for paired rows (two label+value pairs stacked)
+    P_TOP_LBL, P_TOP_VAL = 0.80, 0.58
+    P_BOT_LBL, P_BOT_VAL = 0.38, 0.12
+    # y-coords for single rows (centred between top and bottom)
+    S_LBL, S_VAL = 0.72, 0.28
+
+    for ci, (tl, tv, bl, bv) in enumerate(paired_cols):
+        cx = S0 + ci * col_w + col_w * 0.5
+        paired = bl is not None
+
+        if paired:
+            axs.text(cx, P_TOP_LBL, tl, ha="center", va="center",
+                     color=MUTED_COLOR, fontsize=7, transform=axs.transAxes)
+            axs.text(cx, P_TOP_VAL, tv, ha="center", va="center",
+                     color=TEXT_COLOR, fontsize=9, fontweight="bold",
+                     transform=axs.transAxes)
+            # subtle mid divider just for paired columns
+            xmin_f = (S0 + ci * col_w) / 1.0
+            xmax_f = (S0 + (ci + 1) * col_w) / 1.0
+            axs.axhline(0.48, xmin=xmin_f, xmax=xmax_f,
+                        color=GRID_COLOR, linewidth=0.5, alpha=0.5)
+            axs.text(cx, P_BOT_LBL, bl, ha="center", va="center",
+                     color=MUTED_COLOR, fontsize=7, transform=axs.transAxes)
+            axs.text(cx, P_BOT_VAL, bv, ha="center", va="center",
+                     color=TEXT_COLOR, fontsize=9, fontweight="bold",
+                     transform=axs.transAxes)
+        else:
+            axs.text(cx, S_LBL, tl, ha="center", va="center",
+                     color=MUTED_COLOR, fontsize=7, transform=axs.transAxes)
+            axs.text(cx, S_VAL, tv, ha="center", va="center",
+                     color=TEXT_COLOR, fontsize=9, fontweight="bold",
+                     transform=axs.transAxes)
 
     fig.add_artist(matplotlib.lines.Line2D(
-        [0.05, 0.95], [0.175, 0.175],
+        [0.05, 0.95], [0.135, 0.135],
         transform=fig.transFigure,
         color=GRID_COLOR, linewidth=0.8,
     ))
