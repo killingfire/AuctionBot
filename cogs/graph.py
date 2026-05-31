@@ -1187,7 +1187,7 @@ class Graph(commands.Cog):
             f"{REPLY} **All-time Max** — the absolute highest sale ever recorded, including outliers"
         )
 
-        _filters_text = (
+        _filters_body = (
             f"**🔍 Available Filters**\n"
             f"-# Use these with `j!g` — e.g. `j!g --name pikachu --shiny --iv >90`\n"
             f"{REPLY} `--name <value>` — Pokémon name  _(--n, -n, --pokemon)_\n"
@@ -1213,8 +1213,10 @@ class Graph(commands.Cog):
             f"{REPLY} `--withoutliers` — ⚠️ Plot ALL data including outliers (raw mode, may use log scale)\n"
             f"{REPLY} `--since <date>` — Only show auctions from this date onwards (YYYY, YYYY-MM, or YYYY-MM-DD)\n"
             f"{REPLY} `--before <date>` — Only show auctions before this date (YYYY, YYYY-MM, or YYYY-MM-DD)\n"
-            f"{REPLY} `--compare <name> [name2 ...]` — Overlay up to 4 other Pokémon on the same graph\n\n"
-            f"-# 💡 **Pro tip:** Use `--limit` to focus on the most recent auctions of a Pokémon — "
+            f"{REPLY} `--compare <name> [name2 ...]` — Overlay up to 4 other Pokémon on the same graph"
+        )
+        _protip_text = (
+            f"-# 💡 **Pro tip:** Use `--limit` to focus on the most recent auctions — "
             f"e.g. `j!g --name garchomp --limit 50` graphs only the latest 50 sales, "
             f"giving you a much cleaner picture of where prices stand today."
         )
@@ -1288,6 +1290,7 @@ class Graph(commands.Cog):
             # Rebuild buttons with updated toggle state
             new_btn_list = _build_btn_list(
                 legend_text=_legend_capture,
+                filters_text=_filters_body,
                 has_outliers=has_out_new,
                 outlier_count=n_out_new,
                 outlier_bytes=out_buf_new,
@@ -1305,8 +1308,7 @@ class Graph(commands.Cog):
                     discord.MediaGalleryItem(media="attachment://graph.png"),
                 ),
                 discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-                discord.ui.TextDisplay(content=_filters_text),
-                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(content=_protip_text),
             ]
 
             class NewGraphView(discord.ui.LayoutView):
@@ -1325,16 +1327,17 @@ class Graph(commands.Cog):
 
         # ── Button factory (used both for initial view and after toggles) ──────
         def _build_btn_list(
-            legend_text, has_outliers, outlier_count, outlier_bytes,
+            legend_text, filters_text, has_outliers, outlier_count, outlier_bytes,
             outlier_data, is_alltime, is_outliers, regenerate_fn,
         ):
             btn_list = []
 
+            # ── 📖 How to Read This Graph ──────────────────────────────────────
             class _HowToReadBtn(discord.ui.Button):
                 def __init__(self):
                     super().__init__(
                         style=discord.ButtonStyle.secondary,
-                        label="📖 How to read",
+                        label="📖 How to Read This Graph",
                         custom_id="g_legend",
                     )
                 async def callback(self, interaction: discord.Interaction):
@@ -1347,17 +1350,41 @@ class Graph(commands.Cog):
 
             btn_list.append(_HowToReadBtn())
 
-            # ── 🕐 All-time toggle ─────────────────────────────────────────────
+            # ── 🔍 Available Filters ───────────────────────────────────────────
+            _ft = filters_text
+
+            class _FiltersBtn(discord.ui.Button):
+                def __init__(self):
+                    super().__init__(
+                        style=discord.ButtonStyle.secondary,
+                        label="🔍 Available Filters",
+                        custom_id="g_filters",
+                    )
+                async def callback(self, interaction: discord.Interaction):
+                    class FiltersView(discord.ui.LayoutView):
+                        c = discord.ui.Container(
+                            discord.ui.TextDisplay(content=_ft),
+                            accent_colour=config.EMBED_COLOR,
+                        )
+                    await interaction.response.send_message(view=FiltersView(), ephemeral=True)
+
+            btn_list.append(_FiltersBtn())
+
+            # ── 🕐 All-time / Since 2024 toggle ───────────────────────────────
             _is_alltime_cap  = is_alltime
             _is_outliers_cap = is_outliers
 
             class _AlltimeBtn(discord.ui.Button):
                 def __init__(self):
-                    super().__init__(
-                        style=discord.ButtonStyle.success if _is_alltime_cap else discord.ButtonStyle.secondary,
-                        label="🕐 All-time" if not _is_alltime_cap else "📅 Since 2024",
-                        custom_id="g_alltime",
-                    )
+                    if _is_alltime_cap:
+                        # currently showing all-time → button offers to go back to 2024+
+                        _style = discord.ButtonStyle.success
+                        _label = f"📅 Since {GRAPH_START_YEAR} Only"
+                    else:
+                        # currently showing 2024+ → button offers to expand to all-time
+                        _style = discord.ButtonStyle.secondary
+                        _label = "🕐 Show All-time Data"
+                    super().__init__(style=_style, label=_label, custom_id="g_alltime")
                 async def callback(self, interaction: discord.Interaction):
                     await regenerate_fn(interaction, not _is_alltime_cap, _is_outliers_cap)
 
@@ -1366,11 +1393,15 @@ class Graph(commands.Cog):
             # ── ⚠️ Outliers toggle ─────────────────────────────────────────────
             class _OutliersToggleBtn(discord.ui.Button):
                 def __init__(self):
-                    super().__init__(
-                        style=discord.ButtonStyle.danger if _is_outliers_cap else discord.ButtonStyle.secondary,
-                        label="📊 Clean view" if _is_outliers_cap else "⚠️ Raw data (all outliers)",
-                        custom_id="g_outliers_toggle",
-                    )
+                    if _is_outliers_cap:
+                        # currently raw (outliers shown) → button offers clean view
+                        _style = discord.ButtonStyle.danger
+                        _label = "📊 Hide Outliers (Clean View)"
+                    else:
+                        # currently clean → button offers raw mode
+                        _style = discord.ButtonStyle.secondary
+                        _label = "⚠️ Show Outliers (Raw Data)"
+                    super().__init__(style=_style, label=_label, custom_id="g_outliers_toggle")
                 async def callback(self, interaction: discord.Interaction):
                     await regenerate_fn(interaction, _is_alltime_cap, not _is_outliers_cap)
 
@@ -1383,9 +1414,9 @@ class Graph(commands.Cog):
                 n_high = sum(1 for e in outlier_data if (e[3] if len(e) == 4 else "high") == "high")
                 n_low  = _oc - n_high
                 parts  = []
-                if n_high: parts.append(f"▲{n_high} high")
-                if n_low:  parts.append(f"▼{n_low} low")
-                label  = f"📋 {_oc} outlier(s) ({', '.join(parts)})"
+                if n_high: parts.append(f"▲{n_high} overpriced")
+                if n_low:  parts.append(f"▼{n_low} sniped")
+                label  = f"📋 View {_oc} Excluded Sale(s) ({', '.join(parts)})"
 
                 class _OutlierDetailBtn(discord.ui.Button):
                     def __init__(self):
@@ -1401,8 +1432,8 @@ class Graph(commands.Cog):
                         class OutlierView(discord.ui.LayoutView):
                             c = discord.ui.Container(
                                 discord.ui.TextDisplay(content=(
-                                    f"⚠️ **{_oc} outlier sale(s) excluded from the graph**\n"
-                                    f"_▲ High outliers inflate prices; ▼ Low outliers (sniped/underpriced) compress the Y-axis. Both are hidden by default._"
+                                    f"📋 **{_oc} sale(s) excluded from the graph**\n"
+                                    f"_▲ Overpriced outliers inflate the average; ▼ sniped/underpriced sales compress the Y-axis. Both are hidden by default for a cleaner chart._"
                                 )),
                                 discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
                                 discord.ui.MediaGallery(
@@ -1421,6 +1452,7 @@ class Graph(commands.Cog):
         # ── Build initial button list and view ────────────────────────────────
         _btn_list = _build_btn_list(
             legend_text=_legend_capture,
+            filters_text=_filters_body,
             has_outliers=_has_outliers,
             outlier_count=_outlier_count,
             outlier_bytes=_outlier_bytes,
@@ -1438,8 +1470,7 @@ class Graph(commands.Cog):
                 discord.MediaGalleryItem(media="attachment://graph.png"),
             ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content=_filters_text),
-            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content=_protip_text),
         ]
 
         _action_row = discord.ui.ActionRow(*_btn_list)
