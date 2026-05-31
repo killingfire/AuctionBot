@@ -309,9 +309,19 @@ def build_compare_graph(
         })
 
     # ── Axes formatting ───────────────────────────────────────────────────────
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
-    fig.autofmt_xdate(rotation=30, ha="right")
+    _locator = mdates.AutoDateLocator(minticks=4, maxticks=10)
+    ax.xaxis.set_major_locator(_locator)
+    _formatter = mdates.ConciseDateFormatter(
+        _locator,
+        formats=["%Y", "%b", "%b", "%b %-d", "%H:%M", "%S.%f"],
+        offset_formats=["", "%Y", "%b %Y", "%b %Y", "%b %-d %Y", "%b %-d %Y %H:%M"],
+        show_offset=True,
+    )
+    _formatter.offset_string = ""   # we handle year via the formats themselves
+    ax.xaxis.set_major_formatter(_formatter)
+    ax.xaxis.get_offset_text().set_color(MUTED_COLOR)
+    ax.xaxis.get_offset_text().set_fontsize(8)
+    fig.autofmt_xdate(rotation=25, ha="right")
     ax.tick_params(colors=TEXT_COLOR, labelsize=9)
     for spine in ax.spines.values():
         spine.set_edgecolor(GRID_COLOR)
@@ -550,9 +560,18 @@ def build_graph(
             arrowprops=dict(arrowstyle="-", color=color, lw=1),
         )
 
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
-    fig.autofmt_xdate(rotation=30, ha="right")
+    _locator = mdates.AutoDateLocator(minticks=4, maxticks=10)
+    ax.xaxis.set_major_locator(_locator)
+    _formatter = mdates.ConciseDateFormatter(
+        _locator,
+        formats=["%Y", "%b", "%b", "%b %-d", "%H:%M", "%S.%f"],
+        offset_formats=["", "%Y", "%b %Y", "%b %Y", "%b %-d %Y", "%b %-d %Y %H:%M"],
+        show_offset=True,
+    )
+    ax.xaxis.set_major_formatter(_formatter)
+    ax.xaxis.get_offset_text().set_color(MUTED_COLOR)
+    ax.xaxis.get_offset_text().set_fontsize(8)
+    fig.autofmt_xdate(rotation=25, ha="right")
 
     ax.tick_params(colors=TEXT_COLOR, labelsize=9)
     for spine in ax.spines.values():
