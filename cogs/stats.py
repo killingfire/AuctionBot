@@ -1263,12 +1263,15 @@ class Stats(commands.Cog):
 
     @commands.hybrid_command(name="auction_stats", aliases=["stats"])
     @app_commands.describe(user="User to look up (leave empty for yourself)")
-    async def stats_cmd(self, ctx: commands.Context, *, user: str | None = None):
+    async def stats_cmd(self, ctx: commands.Context, *, user: discord.Member | discord.User | str | None = None):
         """Show detailed auction stats for a user"""
         target: discord.User | discord.Member | None = None
 
-        if user is not None:
-            # strip mention formatting if present: <@123> or <@!123>
+        if isinstance(user, (discord.Member, discord.User)):
+            # Slash command resolved the mention to a Member/User object directly
+            target = user
+        elif isinstance(user, str):
+            # Prefix command — parse the raw string
             raw = user.strip().lstrip("<@!").rstrip(">")
             if raw.isdigit():
                 uid = int(raw)
