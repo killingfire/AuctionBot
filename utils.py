@@ -567,18 +567,18 @@ def _resolve_exclude_names(kind: str, val: str) -> set[str]:
     Supported kinds
     ───────────────
       name      – exact single canonical name only (no form/evo expansion)
-                  e.g. --ex name meowth  → only "Meowth", not Alolan/Galarian
+                  e.g. --ex name meowth  → only "Meowth"
       evo       – entire evo family
-                  e.g. --ex evo meowth  → Meowth + Alolan Meowth + all Persians
+                  e.g. --ex evo meowth  → Meowth + all Persians etc.
       type      – all Pokémon of that type
                   e.g. --ex type grass
       region    – all Pokémon from that region
                   e.g. --ex region kanto
       category  – a registered category (event, rares, legendaries…)
-      cat / group – aliases for category
+      cat/group – aliases for category
 
-    If kind is unrecognised, falls back to the old auto-detect order so that
-    bare --ex <val> (legacy one-token usage) still works.
+    If kind is unrecognised or empty, falls back to the old auto-detect order
+    so that bare --ex <val> (legacy one-token usage) still works.
     """
     from categories import resolve_category as _resolve_cat
 
@@ -587,7 +587,6 @@ def _resolve_exclude_names(kind: str, val: str) -> set[str]:
 
     # ── Explicit kind dispatch ────────────────────────────────────────────────
     if kind == "name":
-        # Strictly the one canonical name the user asked for — no expansion
         resolved = resolve_pokemon_name(val)
         return {resolved} if resolved else set()
 
@@ -607,12 +606,7 @@ def _resolve_exclude_names(kind: str, val: str) -> set[str]:
         cat = _resolve_cat(val)
         return set(cat["pokemon"]) if cat else set()
 
-    # ── Unknown kind: treat as if the user wrote --ex <kind> with no second
-    #    token (legacy / fallback).  val is unused in this branch because the
-    #    caller already joined kind+val back when it detected an unknown kind.
-    # The caller (_build_query exclude block) passes kind="" and val=full_text
-    # for the legacy path, so we should never reach here with a non-empty
-    # unknown kind in normal usage.  Handle it gracefully anyway.
+    # ── Unknown / empty kind: legacy auto-detect (first match wins) ──────────
     combined = f"{kind} {val}".strip() if val else kind
 
     cat = _resolve_cat(combined)
@@ -819,18 +813,15 @@ def build_query(
 
         # ── Exclude ───────────────────────────────────────────────────────────
         # Syntax:  --ex <kind> <argument>
-        #   kind is one of: name, evo, type, region, category/cat/group
-        #   e.g.  --ex name meowth       → strictly Meowth only
-        #         --ex evo meowth        → whole evo family
-        #         --ex type grass        → all Grass-types
-        #         --ex region kanto      → all Kanto mons
-        #         --ex category event    → all event mons
+        #   kind: name | evo | type | region | category/cat/group
+        # e.g.  --ex name meowth       → strictly Meowth only
+        #       --ex evo meowth        → whole evo family
+        #       --ex type grass        → all Grass-types
+        #       --ex region kanto      → all Kanto mons
+        #       --ex category event    → all event mons
         # Stackable: each --ex clause adds to exclude_set independently.
+        # Falls back to legacy single-token auto-detect if kind is unknown.
         if canonical == "--exclude":
-            # val already consumed the first token (kind).
-            # Peek at the next token to get the argument, but only if it
-            # looks like a known kind keyword — otherwise fall back to legacy
-            # single-token mode so old usage still works.
             kind_token = val.strip().lower()
             if kind_token in _EX_KINDS:
                 # Read the actual argument (may be multi-word up to next flag)
