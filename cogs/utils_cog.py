@@ -154,7 +154,7 @@ def _error_view(text: str) -> discord.ui.LayoutView:
 # ═════════════════════════════════════════════════════════════════════════════
 
 # How far back to look for price data — keeps results reflecting current market.
-PRICE_LOOKBACK_MONTHS = 2
+PRICE_LOOKBACK_MONTHS = 4
 
 
 def _fetch_avg_prices(names: list[str]) -> dict[str, dict]:
@@ -515,7 +515,7 @@ def _build_srinfo_view(name: str, denom: int, chance: str, pct: str,
             f"{REPLY} Total sales: `{total_sales:,}`"
         )
     else:
-        price_block = f"**💰 Shiny Auction Prices**\n{REPLY} _No shiny auction data found._"
+        price_block = f"**💰 Shiny Auction Prices**\n{REPLY} _No shiny auction data found for last {PRICE_LOOKBACK_MONTHS} months._"
 
     comps = [
         discord.ui.TextDisplay(content=spawn_block),
