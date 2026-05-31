@@ -554,53 +554,87 @@ class TokenReader:
 # EXCLUDE HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _resolve_exclude_names(val: str, expand_name_by_dex: bool) -> set[str]:
-    """
-    Given a value from --exclude / --ex, return the set of canonical Pokémon
-    names to subtract from the final result.
+# ── Known --ex subcommand kinds ─────────────────────────────────────────────
+_EX_KINDS = frozenset({"name", "evo", "evolution", "type", "region", "reg",
+                        "category", "cat", "group"})
 
-    Resolution order (first match wins):
-      1. Category  (e.g. "event", "rares", "legendary")
-      2. Evo family (e.g. "pikachu" → entire evo line)
-      3. Type      (e.g. "fire", "water")
-      4. Region    (e.g. "kanto", "galar")
-      5. Name      (exact canonical name, expanded by forms if expand_name_by_dex)
+
+def _resolve_exclude_names(kind: str, val: str) -> set[str]:
+    """
+    Resolve one --ex <kind> <val> clause into a set of canonical names to
+    subtract from the query result.
+
+    Supported kinds
+    ───────────────
+      name      – exact single canonical name only (no form/evo expansion)
+                  e.g. --ex name meowth  → only "Meowth", not Alolan/Galarian
+      evo       – entire evo family
+                  e.g. --ex evo meowth  → Meowth + Alolan Meowth + all Persians
+      type      – all Pokémon of that type
+                  e.g. --ex type grass
+      region    – all Pokémon from that region
+                  e.g. --ex region kanto
+      category  – a registered category (event, rares, legendaries…)
+      cat / group – aliases for category
+
+    If kind is unrecognised, falls back to the old auto-detect order so that
+    bare --ex <val> (legacy one-token usage) still works.
     """
     from categories import resolve_category as _resolve_cat
 
-    val = val.strip()
+    kind = kind.strip().lower()
+    val  = val.strip()
 
-    # 1. Category
-    cat = _resolve_cat(val)
+    # ── Explicit kind dispatch ────────────────────────────────────────────────
+    if kind == "name":
+        # Strictly the one canonical name the user asked for — no expansion
+        resolved = resolve_pokemon_name(val)
+        return {resolved} if resolved else set()
+
+    if kind in ("evo", "evolution"):
+        family = get_evo_family(val)
+        return set(family) if family else set()
+
+    if kind == "type":
+        names = get_pokemon_data_db().get_names_by_type([val])
+        return set(names) if names else set()
+
+    if kind in ("region", "reg"):
+        names = get_pokemon_data_db().get_names_by_region(val)
+        return set(names) if names else set()
+
+    if kind in ("category", "cat", "group"):
+        cat = _resolve_cat(val)
+        return set(cat["pokemon"]) if cat else set()
+
+    # ── Unknown kind: treat as if the user wrote --ex <kind> with no second
+    #    token (legacy / fallback).  val is unused in this branch because the
+    #    caller already joined kind+val back when it detected an unknown kind.
+    # The caller (_build_query exclude block) passes kind="" and val=full_text
+    # for the legacy path, so we should never reach here with a non-empty
+    # unknown kind in normal usage.  Handle it gracefully anyway.
+    combined = f"{kind} {val}".strip() if val else kind
+
+    cat = _resolve_cat(combined)
     if cat:
         return set(cat["pokemon"])
 
-    # 2. Evo family
-    family = get_evo_family(val)
+    family = get_evo_family(combined)
     if family:
         return set(family)
 
-    # 3. Type
-    type_names = get_pokemon_data_db().get_names_by_type([val])
+    type_names = get_pokemon_data_db().get_names_by_type([combined])
     if type_names:
         return set(type_names)
 
-    # 4. Region
-    region_names = get_pokemon_data_db().get_names_by_region(val)
+    region_names = get_pokemon_data_db().get_names_by_region(combined)
     if region_names:
         return set(region_names)
 
-    # 5. Name — use FormsDB when expand_name_by_dex, else single canonical
-    if expand_name_by_dex:
-        forms_result = get_forms_db().resolve_name_to_forms(val)
-        if forms_result:
-            return forms_result
-
-    resolved = resolve_pokemon_name(val)
+    resolved = resolve_pokemon_name(combined)
     if resolved:
         return {resolved}
 
-    # No match found — return empty set
     return set()
 
 
@@ -784,10 +818,32 @@ def build_query(
             continue
 
         # ── Exclude ───────────────────────────────────────────────────────────
+        # Syntax:  --ex <kind> <argument>
+        #   kind is one of: name, evo, type, region, category/cat/group
+        #   e.g.  --ex name meowth       → strictly Meowth only
+        #         --ex evo meowth        → whole evo family
+        #         --ex type grass        → all Grass-types
+        #         --ex region kanto      → all Kanto mons
+        #         --ex category event    → all event mons
+        # Stackable: each --ex clause adds to exclude_set independently.
         if canonical == "--exclude":
-            excluded = _resolve_exclude_names(val, expand_name_by_dex)
-            if excluded:
-                exclude_set.update(excluded)
+            # val already consumed the first token (kind).
+            # Peek at the next token to get the argument, but only if it
+            # looks like a known kind keyword — otherwise fall back to legacy
+            # single-token mode so old usage still works.
+            kind_token = val.strip().lower()
+            if kind_token in _EX_KINDS:
+                # Read the actual argument (may be multi-word up to next flag)
+                arg_val = reader.read_value_greedy()
+                if arg_val:
+                    excluded = _resolve_exclude_names(kind_token, arg_val)
+                    if excluded:
+                        exclude_set.update(excluded)
+            else:
+                # Legacy / unknown: treat the whole value as auto-detected
+                excluded = _resolve_exclude_names("", kind_token)
+                if excluded:
+                    exclude_set.update(excluded)
             continue
 
         # ── Name → UNION into name_pool ───────────────────────────────────────
