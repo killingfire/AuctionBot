@@ -1310,7 +1310,7 @@ class Stats(commands.Cog):
             view = _build_user_stats_view(target, data=data)
         await ctx.reply(view=view, mention_author=False)
 
-    @commands.hybrid_command(name="lb", aliases=["leaderboard"])
+    @commands.hybrid_command(name="auction_leaderboard", aliases=["leaderboard"])
     @app_commands.describe(
         lb_type="sellers | bidders | shiny_sellers | shiny_bidders | gmax_sellers | gmax_bidders | pokemon | expensive",
         variant="For pokemon: normal | shiny | gmax | overall",
