@@ -282,7 +282,7 @@ FLAG_DEFINITIONS: dict[str, dict] = {
         "aliases":     ["--ex", "--not", "--no", "--except", "--without"],
         "takes_arg":   True,
         "multi":       True,
-        "help":        "Exclude by category, name, evo family, type, or region (e.g. --ex event, --ex pikachu, --ex fire)",
+        "help":        "Exclude by subcommand: --ex name <name> | --ex evo <name> | --ex type <type> | --ex region <region> | --ex category <cat>. Stackable.",
         "mongo_field": None,
     },
 
