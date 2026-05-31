@@ -23,7 +23,7 @@ log = logging.getLogger("usage_logger")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 # ID of the Discord channel where batch reports are sent.
-LOG_CHANNEL_ID: int = 0  # ← Replace with your channel ID
+LOG_CHANNEL_ID: int = 1510518266442027148  # ← Replace with your channel ID
 
 # How many command uses to collect before sending a report.
 BATCH_SIZE: int = 5
