@@ -6,12 +6,13 @@ import re
 import csv
 
 # ── Config ───────────────────────────────────────────────────────────────────
-TOKEN         = os.environ.get("DISCORD_TOKEN")
-DATA_FILE     = "data/event_names.json"
-EVOLUTION_CSV = "data/evolution.csv"
-FORMS_CSV     = "data/pokemon_forms.csv"
-POKEMON_CSV   = "data/pokemon_data.csv"
-POKETWO_ID    = 716390085896962058
+TOKEN            = os.environ.get("DISCORD_TOKEN")
+POKEMON_JSON     = "data/pokemon_data.json"
+EVOLUTION_CSV    = "data/evolution.csv"
+FORMS_CSV        = "data/pokemon_forms.csv"
+DEX_CSV          = "data/dex_number.csv"
+EGG_CSV          = "data/egg_groups.csv"
+POKETWO_ID       = 716390085896962058
 # ─────────────────────────────────────────────────────────────────────────────
 
 intents = discord.Intents.default()
@@ -20,108 +21,123 @@ client = discord.Client(intents=intents)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  JSON helpers
+#  pokemon_data.json helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def load_json() -> list[dict]:
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    if not os.path.exists(DATA_FILE):
-        return []
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
+def load_pokemon_json() -> dict:
+    os.makedirs(os.path.dirname(POKEMON_JSON), exist_ok=True)
+    if not os.path.exists(POKEMON_JSON):
+        return {}
+    with open(POKEMON_JSON, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_json(data: list[dict]) -> None:
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+def save_pokemon_json(data: dict) -> None:
+    with open(POKEMON_JSON, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def already_in_json(dex_number: str, name: str) -> bool:
-    return any(
-        e.get("dex_number") == dex_number and e.get("name") == name
-        for e in load_json()
-    )
+    data = load_pokemon_json()
+    key = f"{dex_number}_{name}"
+    return key in data
+
+
+def add_to_pokemon_json(entry: dict) -> str:
+    data = load_pokemon_json()
+    key = f"{entry['dex_number']}_{entry['name']}"
+    if key in data:
+        return f"⚠️ `{entry['name']}` already in pokemon_data.json."
+    data[key] = entry
+    save_pokemon_json(data)
+    return f"✅ Saved `#{entry['dex_number']} {entry['name']}` to pokemon_data.json."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  pokemon_data.csv helpers
+#  dex_number.csv helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-POKEMON_CSV_FIELDS = ["dex_number", "name", "region", "type1", "type2"]
-
-def load_pokemon_csv() -> list[dict]:
-    if not os.path.exists(POKEMON_CSV):
+def load_dex_csv() -> list[dict]:
+    if not os.path.exists(DEX_CSV):
         return []
-    with open(POKEMON_CSV, "r", encoding="utf-8", newline="") as f:
+    with open(DEX_CSV, "r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
 
 
-def save_pokemon_csv(rows: list[dict]) -> None:
-    os.makedirs(os.path.dirname(POKEMON_CSV), exist_ok=True)
-    with open(POKEMON_CSV, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=POKEMON_CSV_FIELDS)
+def save_dex_csv(rows: list[dict]) -> None:
+    os.makedirs(os.path.dirname(DEX_CSV), exist_ok=True)
+    with open(DEX_CSV, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["Number", "Name", "Form"])
         writer.writeheader()
         writer.writerows(rows)
 
 
-def already_in_pokemon_csv(dex_number: str, name: str) -> bool:
-    return any(
-        r["dex_number"] == dex_number and r["name"] == name
-        for r in load_pokemon_csv()
-    )
-
-
-def parse_types_from_embed(embed: discord.Embed) -> tuple[str, str]:
+def add_to_dex_csv(dex_number: str, base_name: str, form_name: str = "") -> str:
     """
-    Extract type1 and type2 from the Types field.
-    The field value looks like:
-      <:Grass:123> Grass <:Poison:456> Poison
-    We strip emoji markup and collect the plain words.
+    For a base Pokémon:   Number=dex, Name=base_name, Form=""
+    For a variant/form:   Number=dex, Name=base_name, Form=full_form_name
     """
-    for field in embed.fields:
-        if (field.name or "").strip().lower() == "types":
-            # Remove Discord custom emoji  <:name:id>
-            text = re.sub(r"<:[^>]+>", "", field.value or "")
-            # Remove unicode emoji (e.g. regional flags)
-            text = re.sub(r"[\U0001F300-\U0001FFFF]", "", text)
-            types = [w.strip() for w in text.split() if w.strip()]
-            type1 = types[0] if len(types) > 0 else ""
-            type2 = types[1] if len(types) > 1 else ""
-            return type1, type2
-    return "", ""
+    rows = load_dex_csv()
+    # Check duplicate
+    for r in rows:
+        if r["Number"] == dex_number and r["Name"] == base_name and r.get("Form", "") == form_name:
+            label = form_name if form_name else base_name
+            return f"⚠️ `{label}` already in dex_number.csv."
+
+    new_row = {"Number": dex_number, "Name": base_name, "Form": form_name}
+
+    # Insert after the last row with the same dex number, if any exist
+    same_dex_indices = [i for i, r in enumerate(rows) if r["Number"] == dex_number]
+    if same_dex_indices:
+        insert_at = same_dex_indices[-1] + 1
+        rows.insert(insert_at, new_row)
+    else:
+        # Insert in numeric order
+        inserted = False
+        for i, r in enumerate(rows):
+            try:
+                if int(r["Number"]) > int(dex_number):
+                    rows.insert(i, new_row)
+                    inserted = True
+                    break
+            except ValueError:
+                pass
+        if not inserted:
+            rows.append(new_row)
+
+    save_dex_csv(rows)
+    label = form_name if form_name else base_name
+    return f"✅ Added `#{dex_number} {label}` to dex_number.csv."
 
 
-def parse_region_from_embed(embed: discord.Embed) -> str:
-    for field in embed.fields:
-        if (field.name or "").strip().lower() == "region":
-            return (field.value or "").strip()
-    return ""
+# ══════════════════════════════════════════════════════════════════════════════
+#  egg_groups.csv helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_egg_csv() -> list[dict]:
+    if not os.path.exists(EGG_CSV):
+        return []
+    with open(EGG_CSV, "r", encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
 
 
-def add_to_pokemon_csv(
-    dex_number: str,
-    name: str,
-    region: str,
-    type1: str,
-    type2: str,
-) -> str:
-    if already_in_pokemon_csv(dex_number, name):
-        return f"⚠️ `{name}` already in pokemon_data.csv."
+def save_egg_csv(rows: list[dict]) -> None:
+    os.makedirs(os.path.dirname(EGG_CSV), exist_ok=True)
+    with open(EGG_CSV, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["Name", "Egg Groups"])
+        writer.writeheader()
+        writer.writerows(rows)
 
-    rows = load_pokemon_csv()
 
-    # Insert in dex-number order; variants of same dex go after existing ones
-    new_row = {
-        "dex_number": dex_number,
-        "name": name,
-        "region": region,
-        "type1": type1,
-        "type2": type2,
-    }
-
-    rows.append(new_row)
-    save_pokemon_csv(rows)
-    return f"✅ Saved `#{dex_number} {name}` ({region} | {type1}/{type2 or '—'}) to pokemon_data.csv."
+def add_to_egg_csv(name: str, egg_groups: str) -> str:
+    rows = load_egg_csv()
+    if any(r["Name"] == name for r in rows):
+        return f"⚠️ `{name}` already in egg_groups.csv."
+    rows.append({"Name": name, "Egg Groups": egg_groups})
+    # Keep sorted alphabetically
+    rows.sort(key=lambda r: r["Name"].lower())
+    save_egg_csv(rows)
+    return f"✅ Added `{name}` ({egg_groups}) to egg_groups.csv."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -176,22 +192,18 @@ def commit_evolution_add(new_pokemon: str, row_index: int) -> str:
     row = rows[row_index]
     while len(row) < len(header):
         row.append("")
-
     if new_pokemon in [c.strip() for c in row]:
         return f"⚠️ `{new_pokemon}` is already in that evolution family."
-
     inserted = False
     for i in range(1, len(row)):
         if row[i].strip() == "":
             row[i] = new_pokemon
             inserted = True
             break
-
     if not inserted:
         row.append(new_pokemon)
         if len(row) > len(header):
             header.append(f"Pokemon {len(header)}")
-
     rows[row_index] = row
     save_evolution_csv(header, rows)
     return f"✅ Added `{new_pokemon}` to evolution family ID **{row[0]}**."
@@ -213,8 +225,58 @@ def commit_forms_add(new_pokemon: str, base_pokemon: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Embed parsing
+#  Embed parsing helpers
 # ══════════════════════════════════════════════════════════════════════════════
+
+def parse_types_from_embed(embed: discord.Embed) -> tuple[str, str]:
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "types":
+            text = re.sub(r"<:[^>]+>", "", field.value or "")
+            text = re.sub(r"[\U0001F300-\U0001FFFF]", "", text)
+            types = [w.strip() for w in text.split() if w.strip()]
+            return (types[0] if types else ""), (types[1] if len(types) > 1 else "")
+    return "", ""
+
+
+def parse_region_from_embed(embed: discord.Embed) -> str:
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "region":
+            return (field.value or "").strip()
+    return ""
+
+
+def parse_catchable_from_embed(embed: discord.Embed) -> str:
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "catchable":
+            return (field.value or "").strip()
+    return ""
+
+
+def parse_egg_groups_from_embed(embed: discord.Embed) -> str:
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "egg groups":
+            val = (field.value or "").strip()
+            # Normalize newlines to comma-separated
+            parts = [p.strip() for p in re.split(r"[\n,]+", val) if p.strip()]
+            return ", ".join(parts)
+    return ""
+
+
+def parse_base_stats_from_embed(embed: discord.Embed) -> dict:
+    stats = {"HP": None, "Attack": None, "Defense": None,
+             "Sp. Atk": None, "Sp. Def": None, "Speed": None}
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "base stats":
+            val = field.value or ""
+            for line in val.splitlines():
+                line = re.sub(r"\*\*", "", line).strip()
+                for stat in stats:
+                    if line.lower().startswith(stat.lower() + ":"):
+                        num = re.search(r"\d+", line)
+                        if num:
+                            stats[stat] = int(num.group())
+    return stats
+
 
 def parse_names_field(names_raw: str) -> dict:
     text = re.sub(r"<:[^>]+>", "", names_raw).strip()
@@ -222,11 +284,38 @@ def parse_names_field(names_raw: str) -> dict:
     names = [p.strip() for p in parts if p.strip()]
     if len(names) <= 1:
         return {}
-    other = [n for n in names[1:] if n]
-    return {"en": other} if other else {}
+    return {"en": [n for n in names[1:] if n]}
+
+
+def parse_appearance_from_embed(embed: discord.Embed) -> dict:
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "appearance":
+            val = field.value or ""
+            h = re.search(r"Height:\s*([\d.]+)\s*m", val)
+            w = re.search(r"Weight:\s*([\d.]+)\s*kg", val)
+            return {
+                "height_m": float(h.group(1)) if h else None,
+                "weight_kg": float(w.group(1)) if w else None,
+            }
+    return {"height_m": None, "weight_kg": None}
+
+
+def parse_gender_ratio_from_embed(embed: discord.Embed) -> str:
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "gender ratio":
+            return (field.value or "").strip()
+    return ""
+
+
+def parse_hatch_time_from_embed(embed: discord.Embed) -> str:
+    for field in embed.fields:
+        if (field.name or "").strip().lower() == "hatch time":
+            return (field.value or "").strip()
+    return ""
 
 
 def parse_poketwo_embed(embed: discord.Embed) -> dict | None:
+    """Parse any Pokétwo info embed (event or non-event custom Pokémon)."""
     title = embed.title or ""
     m = re.match(r"#(\d+)\s+[—–-]\s+(.+)", title)
     if not m:
@@ -236,6 +325,7 @@ def parse_poketwo_embed(embed: discord.Embed) -> dict | None:
     primary_name = m.group(2).strip()
     rarity       = None
     names_raw    = None
+    evolution_raw = None
 
     for field in embed.fields:
         fname = (field.name or "").strip().lower()
@@ -244,87 +334,161 @@ def parse_poketwo_embed(embed: discord.Embed) -> dict | None:
             rarity = fval
         elif fname == "names":
             names_raw = fval
+        elif fname == "evolution":
+            evolution_raw = fval
 
-    if not rarity or rarity.lower() != "event":
+    # Accept: event rarity OR no rarity field at all
+    is_event    = rarity and rarity.lower() == "event"
+    has_no_rarity = rarity is None
+    if not is_event and not has_no_rarity:
         return None
 
     other_names = parse_names_field(names_raw) if names_raw else {}
-
-    # Also grab region + types for pokemon_data.csv
-    region = parse_region_from_embed(embed)
+    region      = parse_region_from_embed(embed)
     type1, type2 = parse_types_from_embed(embed)
+    catchable   = parse_catchable_from_embed(embed)
+    base_stats  = parse_base_stats_from_embed(embed)
+    appearance  = parse_appearance_from_embed(embed)
+    gender_ratio = parse_gender_ratio_from_embed(embed)
+    egg_groups  = parse_egg_groups_from_embed(embed)
+    hatch_time  = parse_hatch_time_from_embed(embed)
+
+    # Build description from embed description
+    description = embed.description or ""
 
     return {
-        "dex_number":  dex_number,
-        "name":        primary_name,
-        "other_names": other_names,
-        "is_variant":  True,
-        # Extra fields (not stored in JSON, used for pokemon_data.csv)
-        "_region":     region,
-        "_type1":      type1,
-        "_type2":      type2,
+        "dex_number":   dex_number,
+        "name":         primary_name,
+        "description":  description,
+        "image_url":    embed.image.url if embed.image else "",
+        "fields":       {"Evolution": evolution_raw or ""},
+        "types":        [t for t in [type1, type2] if t],
+        "region":       region,
+        "catchable":    catchable,
+        "base_stats":   base_stats,
+        "names":        other_names,
+        "appearance":   appearance,
+        "gender_ratio": gender_ratio,
+        "egg_groups":   egg_groups,
+        "hatch_time":   hatch_time,
+        # Internal use only — stripped before saving to JSON
+        "_egg_groups":  egg_groups,
     }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Step 1 — Modal: ask which family + form-of
+#  Step 1 — Ask: is this a variant?
 # ══════════════════════════════════════════════════════════════════════════════
 
-class FamilySearchModal(Modal):
-    def __init__(self, pokemon_name: str, channel: discord.TextChannel):
-        super().__init__(title=f"Locate family for {pokemon_name}")
-        self.pokemon_name = pokemon_name
+class IsVariantView(View):
+    """First question: is this Pokémon a variant/form of an existing one?"""
+
+    def __init__(self, parsed: dict, channel: discord.TextChannel):
+        super().__init__(timeout=300)
+        self.parsed  = parsed
         self.channel = channel
 
-        self.family_input = TextInput(
-            label="2 members of the target evolution family",
-            placeholder="e.g. Bellsprout, Weepinbell",
-            style=discord.TextStyle.short,
-            required=True,
-            max_length=200,
+    @discord.ui.button(label="✅ Yes, it's a variant/form", style=discord.ButtonStyle.success)
+    async def yes_variant(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(
+            VariantInfoModal(self.parsed, self.channel)
         )
-        self.form_of_input = TextInput(
-            label="It's a form of which Pokémon?",
-            placeholder="e.g. Bellsprout",
+        self.stop()
+
+    @discord.ui.button(label="❌ No, it's a base Pokémon", style=discord.ButtonStyle.danger)
+    async def no_variant(self, interaction: discord.Interaction, button: Button):
+        name       = self.parsed["name"]
+        dex_number = self.parsed["dex_number"]
+        egg_groups = self.parsed["_egg_groups"]
+
+        lines = [f"**Saving `{name}` as a base Pokémon...**\n"]
+
+        # Save to pokemon_data.json
+        entry = {k: v for k, v in self.parsed.items() if not k.startswith("_")}
+        lines.append(f"📄 **JSON:** {add_to_pokemon_json(entry)}")
+
+        # dex_number.csv — base entry (no form)
+        lines.append(f"📋 **Dex CSV:** {add_to_dex_csv(dex_number, name, '')}")
+
+        # egg_groups.csv
+        if egg_groups:
+            lines.append(f"🥚 **Egg Groups CSV:** {add_to_egg_csv(name, egg_groups)}")
+
+        await interaction.response.edit_message(
+            content="\n".join(lines), embed=None, view=None
+        )
+        self.stop()
+
+    @discord.ui.button(label="⏭️ Skip entirely", style=discord.ButtonStyle.secondary)
+    async def skip(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(
+            content=f"Skipped `{self.parsed['name']}` entirely.", embed=None, view=None
+        )
+        self.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Step 2 — Modal: gather variant details
+# ══════════════════════════════════════════════════════════════════════════════
+
+class VariantInfoModal(Modal):
+    def __init__(self, parsed: dict, channel: discord.TextChannel):
+        super().__init__(title=f"Variant info for {parsed['name']}")
+        self.parsed  = parsed
+        self.channel = channel
+
+        self.base_name_input = TextInput(
+            label="Base Pokémon name (e.g. Tangrowth)",
+            placeholder="The original / base form",
             style=discord.TextStyle.short,
             required=True,
             max_length=100,
         )
+        self.family_input = TextInput(
+            label="2 members of its evolution family",
+            placeholder="e.g. Tangela, Tangrowth",
+            style=discord.TextStyle.short,
+            required=True,
+            max_length=200,
+        )
+        self.add_item(self.base_name_input)
         self.add_item(self.family_input)
-        self.add_item(self.form_of_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        base_poke = self.base_name_input.value.strip()
         members   = [
             m.strip()
             for m in self.family_input.value.replace(";", ",").split(",")
             if m.strip()
         ]
-        base_poke = self.form_of_input.value.strip()
 
         row_idx, family_members = find_evolution_family(members)
         existing_forms = find_base_pokemon_forms(base_poke)
+        name       = self.parsed["name"]
+        dex_number = self.parsed["dex_number"]
+        egg_groups = self.parsed["_egg_groups"]
 
         preview = discord.Embed(
-            title=f"Preview — adding `{self.pokemon_name}`",
+            title=f"Preview — adding `{name}` as variant of `{base_poke}`",
             color=discord.Color.orange(),
         )
 
         if row_idx is None:
             preview.add_field(
                 name="❌ Evolution family",
-                value=f"No family found containing: **{', '.join(members)}**\nDouble-check the names.",
+                value=f"No family found for: **{', '.join(members)}**\nDouble-check names.",
                 inline=False,
             )
             evo_ok = False
         else:
             preview.add_field(
-                name="📋 Evolution family (current members)",
+                name="📋 Evolution family (current)",
                 value=", ".join(f"`{m}`" for m in family_members) or "*(empty)*",
                 inline=False,
             )
             preview.add_field(
                 name="➕ Will add to family",
-                value=f"`{self.pokemon_name}`",
+                value=f"`{name}`",
                 inline=False,
             )
             evo_ok = True
@@ -336,65 +500,89 @@ class FamilySearchModal(Modal):
         )
         preview.add_field(
             name="➕ Will add as form",
-            value=f"`{self.pokemon_name}` → form of `{base_poke}`",
+            value=f"`{name}` → form of `{base_poke}`",
             inline=False,
         )
+        preview.add_field(
+            name="📋 dex_number.csv",
+            value=f"Row: `{dex_number}` | `{base_poke}` | `{name}`",
+            inline=False,
+        )
+        if egg_groups:
+            preview.add_field(
+                name="🥚 egg_groups.csv",
+                value=f"`{name}` → `{egg_groups}`",
+                inline=False,
+            )
+        preview.set_footer(text="Confirm to write all changes, or Re-enter / Cancel.")
 
-        preview.set_footer(text="Confirm to write changes, or Cancel to abort.")
-
-        view = ConfirmView(
-            pokemon_name=self.pokemon_name,
+        view = VariantConfirmView(
+            parsed=self.parsed,
             row_idx=row_idx,
             base_poke=base_poke,
             evo_ok=evo_ok,
             channel=self.channel,
         )
-
         await interaction.response.send_message(embed=preview, view=view)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Step 2 — Confirm / Re-enter / Cancel
+#  Step 3 — Confirm variant save
 # ══════════════════════════════════════════════════════════════════════════════
 
-class ConfirmView(View):
+class VariantConfirmView(View):
     def __init__(
         self,
-        pokemon_name: str,
+        parsed: dict,
         row_idx: int | None,
         base_poke: str,
         evo_ok: bool,
         channel: discord.TextChannel,
     ):
         super().__init__(timeout=120)
-        self.pokemon_name = pokemon_name
-        self.row_idx      = row_idx
-        self.base_poke    = base_poke
-        self.evo_ok       = evo_ok
-        self.channel      = channel
+        self.parsed    = parsed
+        self.row_idx   = row_idx
+        self.base_poke = base_poke
+        self.evo_ok    = evo_ok
+        self.channel   = channel
 
     @discord.ui.button(label="✅ Confirm & Save", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: Button):
-        lines = [f"**Saving `{self.pokemon_name}`...**\n"]
+        name       = self.parsed["name"]
+        dex_number = self.parsed["dex_number"]
+        egg_groups = self.parsed["_egg_groups"]
 
+        lines = [f"**Saving `{name}` as variant...**\n"]
+
+        # pokemon_data.json
+        entry = {k: v for k, v in self.parsed.items() if not k.startswith("_")}
+        lines.append(f"📄 **JSON:** {add_to_pokemon_json(entry)}")
+
+        # evolution.csv
         if self.evo_ok:
-            lines.append(f"**Evolution family:** {commit_evolution_add(self.pokemon_name, self.row_idx)}")
+            lines.append(f"🔗 **Evo CSV:** {commit_evolution_add(name, self.row_idx)}")
         else:
-            lines.append("**Evolution family:** ❌ Skipped — family not found.")
+            lines.append("🔗 **Evo CSV:** ❌ Skipped — family not found.")
 
-        lines.append(f"**Pokémon forms:** {commit_forms_add(self.pokemon_name, self.base_poke)}")
+        # pokemon_forms.csv
+        lines.append(f"🔀 **Forms CSV:** {commit_forms_add(name, self.base_poke)}")
+
+        # dex_number.csv — variant row: Number | base_name | full_variant_name
+        lines.append(f"📋 **Dex CSV:** {add_to_dex_csv(dex_number, self.base_poke, name)}")
+
+        # egg_groups.csv
+        if egg_groups:
+            lines.append(f"🥚 **Egg Groups CSV:** {add_to_egg_csv(name, egg_groups)}")
 
         await interaction.response.edit_message(
-            content="\n".join(lines),
-            embed=None,
-            view=None,
+            content="\n".join(lines), embed=None, view=None
         )
         self.stop()
 
     @discord.ui.button(label="✏️ Re-enter", style=discord.ButtonStyle.primary)
     async def redo(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(
-            FamilySearchModal(self.pokemon_name, self.channel)
+            VariantInfoModal(self.parsed, self.channel)
         )
         await interaction.message.edit(view=None)
         self.stop()
@@ -402,34 +590,8 @@ class ConfirmView(View):
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
     async def cancel(self, interaction: discord.Interaction, button: Button):
         await interaction.response.edit_message(
-            content=f"Cancelled CSV update for **{self.pokemon_name}**.",
-            embed=None,
-            view=None,
-        )
-        self.stop()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Step 0 — trigger button
-# ══════════════════════════════════════════════════════════════════════════════
-
-class AddToCsvView(View):
-    def __init__(self, pokemon_name: str):
-        super().__init__(timeout=300)
-        self.pokemon_name = pokemon_name
-
-    @discord.ui.button(label="📋 Add to CSVs", style=discord.ButtonStyle.primary)
-    async def open_form(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(
-            FamilySearchModal(self.pokemon_name, interaction.channel)
-        )
-        self.stop()
-
-    @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
-    async def skip(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message(
-            f"Skipped evolution/forms CSV update for **{self.pokemon_name}**.",
-            ephemeral=True,
+            content=f"Cancelled all CSV/JSON updates for **{self.parsed['name']}**.",
+            embed=None, view=None,
         )
         self.stop()
 
@@ -441,10 +603,11 @@ class AddToCsvView(View):
 @client.event
 async def on_ready():
     print(f"✅  Logged in as {client.user} (ID: {client.user.id})")
-    print(f"📂  JSON        : {os.path.abspath(DATA_FILE)}")
-    print(f"📂  Evo CSV     : {os.path.abspath(EVOLUTION_CSV)}")
-    print(f"📂  Forms CSV   : {os.path.abspath(FORMS_CSV)}")
-    print(f"📂  Pokemon CSV : {os.path.abspath(POKEMON_CSV)}")
+    print(f"📂  Pokemon JSON : {os.path.abspath(POKEMON_JSON)}")
+    print(f"📂  Evo CSV      : {os.path.abspath(EVOLUTION_CSV)}")
+    print(f"📂  Forms CSV    : {os.path.abspath(FORMS_CSV)}")
+    print(f"📂  Dex CSV      : {os.path.abspath(DEX_CSV)}")
+    print(f"📂  Egg CSV      : {os.path.abspath(EGG_CSV)}")
 
 
 @client.event
@@ -455,37 +618,35 @@ async def on_message(message: discord.Message):
         return
 
     for embed in message.embeds:
-        entry = parse_poketwo_embed(embed)
-        if entry is None:
+        parsed = parse_poketwo_embed(embed)
+        if parsed is None:
             continue
 
-        name       = entry["name"]
-        dex_number = entry["dex_number"]
-        region     = entry.pop("_region", "")
-        type1      = entry.pop("_type1", "")
-        type2      = entry.pop("_type2", "")
+        name       = parsed["name"]
+        dex_number = parsed["dex_number"]
 
-        # ── 1. Save to event_names.json ───────────────────────────────────
+        # ── Already in JSON? Skip entirely ───────────────────────────────
         if already_in_json(dex_number, name):
             print(f"⏭️  Already in JSON: #{dex_number} {name}")
-        else:
-            data = load_json()
-            data.append(entry)
-            save_json(data)
-            print(f"✅  Saved to JSON: #{dex_number} {name}")
+            continue
 
-        # ── 2. Auto-save to pokemon_data.csv ─────────────────────────────
-        csv_result = add_to_pokemon_csv(dex_number, name, region, type1, type2)
-        print(csv_result)
+        print(f"🆕 New Pokémon detected: #{dex_number} {name}")
 
-        # ── 3. Prompt for evolution / forms CSVs (needs human input) ─────
-        view = AddToCsvView(pokemon_name=name)
-        await message.channel.send(
-            f"🆕 **Event Pokémon detected:** `#{dex_number} — {name}`\n"
-            f"🗂️ **pokemon_data.csv:** {csv_result}\n\n"
-            f"Click **Add to CSVs** to also place it in the evolution family and forms tables.",
-            view=view,
+        # ── Ask the user: variant or base? ───────────────────────────────
+        embed_msg = discord.Embed(
+            title=f"🆕 New Pokémon: #{dex_number} — {name}",
+            description=(
+                f"**Region:** {parsed['region']}\n"
+                f"**Types:** {', '.join(parsed['types']) or '—'}\n"
+                f"**Egg Groups:** {parsed['_egg_groups'] or '—'}\n"
+                f"**Catchable:** {parsed['catchable']}"
+            ),
+            color=discord.Color.blurple(),
         )
+        embed_msg.set_footer(text="Is this a variant/form of an existing Pokémon?")
+
+        view = IsVariantView(parsed=parsed, channel=message.channel)
+        await message.channel.send(embed=embed_msg, view=view)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -494,5 +655,5 @@ async def on_message(message: discord.Message):
 
 if __name__ == "__main__":
     if not TOKEN:
-        raise RuntimeError("DISCORD_TOKEN not set. Add it to Replit Secrets.")
+        raise RuntimeError("DISCORD_TOKEN not set. Add it to Secrets.")
     client.run(TOKEN)
