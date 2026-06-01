@@ -24,7 +24,7 @@ Spearow,
 Fearow,
 Ekans,
 Arbok,
-Pikachu,"Alola Cap Pikachu, Gigantamax Pikachu, Hoenn Cap Pikachu, Kalos Cap Pikachu, Original Cap Pikachu, Partner Cap Pikachu, Partner Pikachu, Pikachu Belle, Pikachu Libre, Pikachu Ph.D., Pikachu Pop Star, Pikachu Rock Star, Sinnoh Cap Pikachu, Unova Cap Pikachu, United Pikachu, Snowman Pikachu, Surf Pikachu"
+Pikachu,"Alola Cap Pikachu, Gigantamax Pikachu, Hoenn Cap Pikachu, Kalos Cap Pikachu, Original Cap Pikachu, Partner Cap Pikachu, Partner Pikachu, Peakychu, Pikachu Belle, Pikachu Libre, Pikachu Ph.D., Pikachu Pop Star, Pikachu Rock Star, Sinnoh Cap Pikachu, Snowman Pikachu, Surf Pikachu, United Pikachu, Unova Cap Pikachu"
 Raichu,"Alolan Raichu, Vampire Raichu"
 Sandshrew,"Alolan Sandshrew, Sandshrew of the Sarcophagus"
 Sandslash,Alolan Sandslash
@@ -131,7 +131,7 @@ Tauros,"Aqua Breed Tauros, Blaze Breed Tauros, Combat Breed Tauros"
 Magikarp,
 Gyarados,Mega Gyarados
 Lapras,"Gigantamax Lapras, Anniversary Lapras, Egg Nest Lapras"
-Ditto,Cracked Ditto
+Ditto,"Cracked Ditto, Pokopia Ditto"
 Eevee,"Gigantamax Eevee, Partner Eevee, Autumn Eevee"
 Vaporeon,
 Jolteon,
@@ -142,7 +142,7 @@ Omastar,
 Kabuto,
 Kabutops,
 Aerodactyl,Mega Aerodactyl
-Snorlax,"Gigantamax Snorlax, Grilling Snorlax, Santa Snorlax"
+Snorlax,"Gigantamax Snorlax, Grilling Snorlax, Mosslax, Santa Snorlax"
 Articuno,Galarian Articuno
 Zapdos,Galarian Zapdos
 Moltres,"Galarian Moltres, Olympic Flame Moltres"
@@ -234,7 +234,7 @@ Phanpy,
 Donphan,
 Porygon2,
 Stantler,
-Smeargle,Fishing Smeargle ft. Magikarp
+Smeargle,"Fishing Smeargle ft. Magikarp, Smearguru"
 Tyrogue,
 Hitmontop,
 Smoochum,
@@ -464,7 +464,7 @@ Weavile,Sage of Shadows
 Magnezone,
 Lickilicky,
 Rhyperior,
-Tangrowth,
+Tangrowth,Prof Tangrowth
 Electivire,
 Magmortar,
 Togekiss,
@@ -478,7 +478,7 @@ Gallade,"Mega Gallade, Festive Gallade"
 Probopass,
 Dusknoir,
 Froslass,
-Rotom,"Fan Rotom, Frost Rotom, Heat Rotom, Mow Rotom, Rotom Drone, Rotom Phone, Rotom Pokédex, Wash Rotom"
+Rotom,"DJ Rotom, Fan Rotom, Frost Rotom, Heat Rotom, Mow Rotom, Rotom Drone, Rotom Phone, Rotom Pokédex, Wash Rotom"
 Uxie,
 Mesprit,
 Azelf,
@@ -819,7 +819,7 @@ Sobble,
 Drizzile,
 Inteleon,"Gigantamax Inteleon, Fencinteleon"
 Skwovet,Painted Acorn Skwovet
-Greedent,
+Greedent,Chef Dente
 Rookidee,
 Corvisquire,
 Corviknight,Gigantamax Corviknight
