@@ -1711,8 +1711,10 @@ dex_number,name,region,type1,type2
 153,Beta Bayleef,Johto,Grass,
 165,Swarming Ledyba,Johto,Bug,Flying
 738,Cicada Vikavolt,Alola,Bug,Electric
-189,Dandelion Jumpluff,Johto,Grass,Flying
-1019,Blossom Hydrapple,Unova,Grass,Dragon
-406,Blooming Budew,Sinnoh,Grass,Poison
-548,Onion Petilil,Unova,Grass,
-46,Mycena Paras,Kanto,Bug,Grass
+132,Pokopia Ditto,Pokopia,Normal,
+465,Prof Tangrowth,Pokopia,Grass,
+820,Chef Dente,Pokopia,Normal,
+479,DJ Rotom,Pokopia,Electric,Ghost
+235,Smearguru,Pokopia,Normal,Psychic
+25,Peakychu,Pokopia,Electric,
+143,Mosslax,Pokopia,Grass,Normal
