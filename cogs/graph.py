@@ -1273,7 +1273,7 @@ class Graph(commands.Cog):
         _protip_text = (
             f"-# 💡 **Pro tip:** Use `--limit` to focus on the most recent auctions — "
             f"e.g. `j!g --name garchomp --limit 50` graphs only the latest 50 sales, "
-            f"giving you a much cleaner picture of where prices stand today."
+            f"giving you a much cleaner picture of where prices stand today. Also add --nosh to exlude shinies, if you are not looking to plot shiny of this pokemon for graph. By Default Both shiny and Normal are plotted for a general command like --n meowth --iv >70 "
         )
 
         # ── Build outlier BytesIO if needed — used only by the button callback ─
