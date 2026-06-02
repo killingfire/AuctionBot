@@ -1,9 +1,17 @@
 """
 cogs/price.py – Smart price lookup for Pokémon auctions.
 
+Redesigned to mirror graph.py capabilities:
+  • Last 20-30 auctions limit (user configurable, with warnings if old)
+  • Remove low outliers, display as range + button
+  • Show price range instead of single values
+  • Add disclaimer about price variance
+  • "View Graph" button linking to graph.py
+  • All filter support from graph.py
+  • Configurable limit with tips
+
 Uses the same filter system as auction search (expand_name_by_dex=True).
-Outliers are excluded from stats using the same 3×IQR fence as graph.py,
-and listed separately as a table image if present.
+Outliers are excluded from stats using the same 3×IQR fence as graph.py.
 
 Field mapping (DB short name → meaning):
   ts   = unix_timestamp      bid  = winning_bid
@@ -33,7 +41,7 @@ from config import REPLY
 from utils import build_query, resolve_pokemon_name
 from filters import FLAG_DEFINITIONS
 
-# ─── DB ───────────────────────────────────────────────────────────────────────
+# ─── DB ─────────────────────────────────────────────────────────────
 _mongo = MongoClient(config.MONGO_URI)
 _db    = _mongo[config.MONGO_DB_NAME]
 _col   = _db[config.MONGO_COLLECTION]
@@ -43,28 +51,28 @@ _NAME_FLAGS: frozenset[str] = frozenset(
     ["--name"] + FLAG_DEFINITIONS["--name"].get("aliases", [])
 )
 
-# How many IV percent points either side to use for "comparable" sales
-IV_BAND = 5.0
-
-# Minimum sales needed before we show a premium estimate
-MIN_PREMIUM_SAMPLE = 5
+# Price cog configuration
+DEFAULT_LIMIT = 25          # Default: last 20-30 auctions
+MAX_LIMIT = 200             # Don't allow more than 200
+DATA_AGE_WARNING = 30       # Days — warn if oldest data is older than this
 
 # Outlier fence multiplier — same as graph.py
 OUTLIER_FENCE = 3.0
 
 # Theme — matches graph.py
-BG_DARK     = "#1e1f22"
-BG_CARD     = "#2b2d31"
-GRID_COLOR  = "#3a3d44"
-TEXT_COLOR  = "#dcddde"
-MUTED_COLOR = "#72767d"
+BG_DARK     = "#0f1117"
+BG_CARD     = "#1a1d27"
+GRID_COLOR  = "#2a2d3a"
+TEXT_COLOR  = "#e8eaf0"
+MUTED_COLOR = "#6c7086"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
 # HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
 
 def _fmt(val: float) -> str:
+    """Format price with appropriate suffix (M, k, etc)."""
     if val >= 1_000_000:
         return f"{val/1_000_000:.2f}M"
     if val >= 100_000:
@@ -77,6 +85,7 @@ def _fmt(val: float) -> str:
 
 
 def _error_view(text: str) -> discord.ui.LayoutView:
+    """Render an error message as a view."""
     class EV(discord.ui.LayoutView):
         c = discord.ui.Container(
             discord.ui.TextDisplay(content=text),
@@ -86,37 +95,50 @@ def _error_view(text: str) -> discord.ui.LayoutView:
 
 
 def _confidence(n: int) -> str:
+    """Return confidence indicator based on sample size."""
     if n >= 30:
         return "🟢 High confidence"
-    if n >= 10:
+    if n >= 15:
         return "🟡 Moderate confidence"
-    return "🔴 Low confidence — small sample"
+    if n >= 5:
+        return "🟠 Low-moderate confidence"
+    return "🔴 Very low confidence — tiny sample"
 
 
 def _prices(records: list[dict]) -> list[float]:
+    """Extract prices from records."""
     return [r["bid"] for r in records if r.get("bid") is not None]
-
-
-def _median(vals: list[float]) -> float:
-    return float(np.median(vals))
 
 
 def _remove_outliers(records: list[dict]) -> tuple[list[dict], list[dict]]:
     """
-    Split records into (clean, outliers) using the same 3xIQR upper fence
-    as graph.py. Falls back to returning all records as clean if fewer than
-    3 would remain after filtering.
+    Split records into (clean, outliers) using the same 3×IQR upper fence
+    as graph.py, but ALSO remove low outliers using the percentage-of-median approach.
+    Falls back to returning all records as clean if fewer than 3 would remain.
     """
     if len(records) < 4:
         return records, []
 
     prices = np.array(_prices(records), dtype=float)
     q1, q3 = np.percentile(prices, 25), np.percentile(prices, 75)
-    iqr    = q3 - q1
-    fence  = q3 + OUTLIER_FENCE * iqr if iqr > 0 else prices.max()
+    median = float(np.median(prices))
+    iqr = q3 - q1
 
-    clean    = [r for r in records if (r.get("bid") or 0) <= fence]
-    outliers = [r for r in records if (r.get("bid") or 0) > fence]
+    # High fence: standard 3×IQR above Q3
+    upper_fence = q3 + OUTLIER_FENCE * iqr if iqr > 0 else prices.max()
+
+    # Low fence: the higher of IQR fence or percentage-of-median
+    iqr_lower = q1 - OUTLIER_FENCE * iqr
+    pct_lower = median * 0.20
+    lower_fence = max(iqr_lower, pct_lower)
+
+    high_outlier_mask = prices > upper_fence
+    low_outlier_mask = (lower_fence > 0) & (prices < lower_fence)
+    outlier_mask = high_outlier_mask | low_outlier_mask
+    plot_mask = ~outlier_mask
+
+    clean = [r for r, m in zip(records, plot_mask) if m]
+    outliers = [r for r, m in zip(records, outlier_mask) if m]
 
     if len(clean) < 3:
         return records, []
@@ -124,48 +146,42 @@ def _remove_outliers(records: list[dict]) -> tuple[list[dict], list[dict]]:
     return clean, outliers
 
 
-def _premium_line(
-    label: str,
-    with_prices: list[float],
-    without_prices: list[float],
-) -> str | None:
-    if len(with_prices) < MIN_PREMIUM_SAMPLE or len(without_prices) < MIN_PREMIUM_SAMPLE:
-        return None
-    diff = _median(with_prices) - _median(without_prices)
-    if abs(diff) < 100:
-        return None
-    sign  = "+" if diff > 0 else "-"
-    arrow = "📈" if diff > 0 else "📉"
-    return f"{arrow} **{label}**: `{sign}{_fmt(abs(diff))}`"
-
-
 def _build_outlier_image(outliers: list[dict]) -> io.BytesIO:
     """
     Table image for outlier sales — matches graph.py style exactly.
-    Columns: #, Auction ID, Date, Level, IV%, Winning Bid
+    Columns: #, Type, Auction ID, Date, Level, IV%, Winning Bid
     """
-    n        = len(outliers)
+    n = len(outliers)
     row_h_in = 0.38
-    head_h   = 0.50
-    fig_h    = head_h + n * row_h_in
+    head_h = 0.50
+    fig_h = head_h + n * row_h_in
 
-    fig, ax = plt.subplots(figsize=(10, fig_h), facecolor=BG_DARK)
+    fig, ax = plt.subplots(figsize=(11, fig_h), facecolor=BG_DARK)
     ax.set_facecolor(BG_DARK)
     ax.axis("off")
 
-    headers    = ["#", "Auction ID", "Date", "Level", "IV %", "Winning Bid"]
-    col_widths = [0.05, 0.18, 0.22, 0.10, 0.13, 0.22]
+    headers = ["#", "Type", "Auction ID", "Date", "Level", "IV %", "Winning Bid"]
+    col_widths = [0.04, 0.08, 0.16, 0.20, 0.09, 0.12, 0.20]
 
     rows = []
     for i, r in enumerate(outliers):
-        ts    = r.get("ts")
-        date  = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%-d %b %Y") if ts else "?"
-        aid   = str(r.get("aid", "?"))
+        ts = r.get("ts")
+        date = (
+            datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%-d %b %Y")
+            if ts
+            else "?"
+        )
+        aid = str(r.get("aid", "?"))
         level = str(r.get("lv", "???"))
-        iv    = r.get("iv")
-        iv_s  = f"{iv:.2f}%" if iv is not None else "???"
-        bid   = r.get("bid", 0)
-        rows.append([str(i + 1), aid, date, level, iv_s, _fmt(bid)])
+        iv = r.get("iv")
+        iv_s = f"{iv:.2f}%" if iv is not None else "???"
+        bid = r.get("bid", 0)
+        
+        # Determine if high or low outlier
+        kind = r.get("_outlier_kind", "high")
+        kind_label = "▲ High" if kind == "high" else "▼ Low"
+        
+        rows.append([str(i + 1), kind_label, aid, date, level, iv_s, _fmt(bid)])
 
     tbl = ax.table(
         cellText=rows,
@@ -182,18 +198,26 @@ def _build_outlier_image(outliers: list[dict]) -> io.BytesIO:
         cell.set_edgecolor(GRID_COLOR)
         cell.set_linewidth(0.5)
         cell.set_height(cell_h)
+
         if row == 0:
             cell.set_facecolor(BG_DARK)
             cell.get_text().set_color(TEXT_COLOR)
             cell.get_text().set_fontweight("bold")
         else:
             cell.set_facecolor(BG_CARD if row % 2 == 0 else BG_DARK)
-            if col == 5:
-                cell.get_text().set_color("#f04747")
+            if col == 6:  # Winning bid
+                kind_val = rows[row - 1][1] if row <= len(rows) else ""
+                color = "#ef476f" if "High" in kind_val else "#ffd166"
+                cell.get_text().set_color(color)
                 cell.get_text().set_fontweight("bold")
-            elif col == 4:
-                cell.get_text().set_color("#ffe066")
-            elif col in (0, 1):
+            elif col == 1:  # Type column
+                kind_val = rows[row - 1][1] if row <= len(rows) else ""
+                color = "#ef476f" if "High" in kind_val else "#ffd166"
+                cell.get_text().set_color(color)
+                cell.get_text().set_fontweight("bold")
+            elif col == 5:
+                cell.get_text().set_color("#ffd166")  # IV % accent gold
+            elif col in (0, 2):
                 cell.get_text().set_color(MUTED_COLOR)
             else:
                 cell.get_text().set_color(TEXT_COLOR)
@@ -218,24 +242,43 @@ def _resolve_display_name(query: dict) -> str:
     return str(pn_val) or "Unknown"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+def _data_age_warning(records: list[dict]) -> str | None:
+    """
+    Return warning text if data is too old (default: >30 days).
+    Returns None if data is recent enough.
+    """
+    if not records:
+        return None
+    
+    # Get oldest record
+    oldest_ts = min(r.get("ts", 0) for r in records)
+    oldest_dt = datetime.fromtimestamp(oldest_ts, tz=timezone.utc)
+    now = datetime.now(tz=timezone.utc)
+    age_days = (now - oldest_dt).days
+    
+    if age_days > DATA_AGE_WARNING:
+        return (
+            f"⚠️ **Data is {age_days} days old** — market prices may have changed. "
+            f"Consider increasing `--limit` to get more recent auctions."
+        )
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────
 # CORE PRICE ANALYSIS
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
 
 def _analyse(
     query: dict,
     filters_str: str,
     limit: int | None = None,
-) -> tuple[discord.ui.LayoutView, io.BytesIO | None]:
+) -> tuple[discord.ui.LayoutView, io.BytesIO | None, str]:
     """
-    Returns (view, outlier_image_buf | None).
+    Returns (view, outlier_image_buf | None, filter_string_for_graph_cmd).
     """
-    name     = _resolve_display_name(query)
+    name = _resolve_display_name(query)
     is_shiny = query.get("sh") is True
-    is_gmax  = query.get("gx") is True
-
-    # Base query: name + shiny + gmax only (wider pool for premium comparisons)
-    base_query: dict = {k: query[k] for k in ("pn", "sh", "gx") if k in query}
+    is_gmax = query.get("gx") is True
 
     projection = {
         "bid": 1, "iv": 1, "lv": 1,
@@ -244,129 +287,80 @@ def _analyse(
         "ts": 1, "aid": 1,
     }
 
-    def _fetch(q: dict, lim: int | None = limit) -> list[dict]:
-        cur = _col.find(q, projection).sort("ts", -1)
-        if lim is not None:
-            cur = cur.limit(lim)
-        return list(cur)
+    # Apply default limit if not specified
+    if limit is None:
+        limit = DEFAULT_LIMIT
 
-    # Exact match — the full user query (all filters applied)
-    exact_raw = _fetch(query)
+    # Fetch records — most recent first
+    cur = _col.find(query, projection).sort("ts", -1).limit(limit)
+    exact_raw = list(cur)
+
     if not exact_raw:
-        return _error_view("❌ No past sales found matching your filters."), None
-
-    # Base records — used for premium estimates (no IV/level/move/etc filters)
-    base_raw = _fetch(base_query)
+        return (
+            _error_view("❌ No past sales found matching your filters."),
+            None,
+            filters_str,
+        )
 
     # ── Outlier detection ─────────────────────────────────────────────────────
     exact_clean, exact_outliers = _remove_outliers(exact_raw)
-    base_clean,  _              = _remove_outliers(base_raw)
 
-    # ── IV-comparable band ────────────────────────────────────────────────────
-    iv_cond   = query.get("iv")
-    iv_target = None
-    if isinstance(iv_cond, dict):
-        if "$gte" in iv_cond and "$lte" in iv_cond:
-            iv_target = (iv_cond["$gte"] + iv_cond["$lte"]) / 2
-        elif "$gte" in iv_cond:
-            iv_target = iv_cond["$gte"]
-        elif "$eq" in iv_cond:
-            iv_target = iv_cond["$eq"]
+    if not exact_clean:
+        return (
+            _error_view("❌ Not enough non-outlier sales data to analyse."),
+            None,
+            filters_str,
+        )
 
-    # Choose stat pool: exact clean → IV-band → all base
-    if len(exact_clean) >= 3:
-        stat_records = exact_clean
-        stat_label   = "exact match"
-    elif iv_target is not None:
-        lo = iv_target - IV_BAND
-        hi = iv_target + IV_BAND
-        comp_raw          = _fetch({**base_query, "iv": {"$gte": lo, "$lte": hi}})
-        comp_clean, _     = _remove_outliers(comp_raw)
-        if len(comp_clean) >= 3:
-            stat_records = comp_clean
-            stat_label   = f"comparable ±{IV_BAND:.0f}% IV"
+    # ── Mark outlier kind (high or low) ───────────────────────────────────────
+    prices = np.array(_prices(exact_raw), dtype=float)
+    q1, q3 = np.percentile(prices, 25), np.percentile(prices, 75)
+    median = float(np.median(prices))
+    iqr = q3 - q1
+    
+    upper_fence = q3 + OUTLIER_FENCE * iqr if iqr > 0 else prices.max()
+    iqr_lower = q1 - OUTLIER_FENCE * iqr
+    pct_lower = median * 0.20
+    lower_fence = max(iqr_lower, pct_lower)
+
+    for r in exact_outliers:
+        bid = r.get("bid", 0)
+        if bid > upper_fence:
+            r["_outlier_kind"] = "high"
         else:
-            stat_records = base_clean
-            stat_label   = "all sales (IV band too narrow)"
-    else:
-        stat_records = base_clean
-        stat_label   = "all sales"
+            r["_outlier_kind"] = "low"
 
-    if not stat_records:
-        return _error_view("❌ Not enough sales data to analyse."), None
+    # ── Statistics ────────────────────────────────────────────────────────────
+    stat_prices = np.array(_prices(exact_clean), dtype=float)
+    n_clean = len(stat_prices)
+    n_total = len(exact_raw)
 
-    stat_prices = np.array(_prices(stat_records), dtype=float)
-    n           = len(stat_prices)
-    p_median    = float(np.median(stat_prices))
-    p_avg       = float(np.mean(stat_prices))
-    p_min       = float(stat_prices.min())
-    p_max       = float(stat_prices.max())
-    p_std       = float(stat_prices.std())
-    p25         = float(np.percentile(stat_prices, 25))
-    p75         = float(np.percentile(stat_prices, 75))
+    p_min = float(stat_prices.min())
+    p_max = float(stat_prices.max())
+    p_avg = float(stat_prices.mean())
+    p_median = float(np.median(stat_prices))
+    p_std = float(stat_prices.std())
+    p25 = float(np.percentile(stat_prices, 25))
+    p75 = float(np.percentile(stat_prices, 75))
 
-    # ── Recent 5 sales ────────────────────────────────────────────────────────
-    recent_five  = sorted(exact_raw, key=lambda r: r.get("ts", 0), reverse=True)[:5]
+    # ── Recent 5 sales ───────────────────────────────────────────────────────
+    recent_five = sorted(exact_raw, key=lambda r: r.get("ts", 0), reverse=True)[:5]
     outlier_aids = {r.get("aid") for r in exact_outliers}
     recent_lines = []
     for r in recent_five:
-        ts   = r.get("ts")
-        dt   = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%-d %b %Y") if ts else "?"
-        iv   = r.get("iv")
+        ts = r.get("ts")
+        dt = (
+            datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%-d %b %Y")
+            if ts
+            else "?"
+        )
+        iv = r.get("iv")
         iv_s = f"{iv:.1f}%" if iv is not None else "?"
-        bid  = r.get("bid", 0)
+        bid = r.get("bid", 0)
         flag = " ⚠️" if r.get("aid") in outlier_aids else ""
         recent_lines.append(
             f"{REPLY} `{_fmt(bid)}` — {iv_s} IV — {dt} — `#{r.get('aid', '?')}`{flag}"
         )
-
-    # ── Attribute premiums ────────────────────────────────────────────────────
-    premiums: list[str] = []
-
-    def _add(label: str, with_r: list[dict], without_r: list[dict]) -> None:
-        line = _premium_line(label, _prices(with_r), _prices(without_r))
-        if line:
-            premiums.append(line)
-
-    if not is_shiny and not is_gmax:
-        _add("Shiny",
-             [r for r in base_clean if r.get("sh")],
-             [r for r in base_clean if not r.get("sh")])
-
-    _add("Max Speed (31)",
-         [r for r in stat_records if r.get("spe") == 31],
-         [r for r in stat_records if r.get("spe") != 31])
-
-    _add("Max Attack (31)",
-         [r for r in stat_records if r.get("atk") == 31],
-         [r for r in stat_records if r.get("atk") != 31])
-
-    _add("0 Attack",
-         [r for r in stat_records if r.get("atk") == 0],
-         [r for r in stat_records if r.get("atk") not in (0, None)])
-
-    _add("Split IV (50%)",
-         [r for r in base_clean if r.get("iv") == 50.0],
-         [r for r in base_clean if r.get("iv") != 50.0])
-
-    _add("Low Level (<15)",
-         [r for r in base_clean if (r.get("lv") or 100) < 15],
-         [r for r in base_clean if (r.get("lv") or 100) >= 15])
-
-    _add("Female",
-         [r for r in base_clean if r.get("gen") == "Female"],
-         [r for r in base_clean if r.get("gen") == "Male"])
-
-    for clause in query.get("$and", []):
-        mv = clause.get("mv", {})
-        if isinstance(mv, dict) and "$elemMatch" in mv:
-            regex = mv["$elemMatch"].get("$regex", "")
-            if regex:
-                _add(f"Move: {regex}",
-                     [r for r in stat_records
-                      if any(regex.lower() in str(m).lower() for m in (r.get("mv") or []))],
-                     [r for r in stat_records
-                      if not any(regex.lower() in str(m).lower() for m in (r.get("mv") or []))])
 
     # ── Outlier image ─────────────────────────────────────────────────────────
     outlier_buf: io.BytesIO | None = None
@@ -377,41 +371,42 @@ def _analyse(
 
     # ── Build text blocks ─────────────────────────────────────────────────────
     shiny_tag = "✨ Shiny " if is_shiny else ""
-    gmax_tag  = "⚡ Gmax "  if is_gmax  else ""
-    title     = f"## 💰 {shiny_tag}{gmax_tag}{name} — Price Check"
+    gmax_tag = "⚡ Gmax " if is_gmax else ""
+    title = f"## 💰 {shiny_tag}{gmax_tag}{name} — Price Check"
 
-    limit_note = f"  •  last {limit:,} sales" if limit is not None else ""
-    iv_note    = f"  •  IV ~{iv_target:.1f}% (±{IV_BAND:.0f}%)" if iv_target is not None else ""
-    sub        = f"-# {n} sales analysed ({stat_label}{iv_note}{limit_note})"
+    # Data age and limits
+    oldest_ts = min(r.get("ts", 0) for r in exact_raw) if exact_raw else 0
+    oldest_dt = datetime.fromtimestamp(oldest_ts, tz=timezone.utc)
+    newest_dt = datetime.fromtimestamp(max(r.get("ts", 0) for r in exact_raw), tz=timezone.utc)
+    date_span = (newest_dt - oldest_dt).days
 
+    age_warning = _data_age_warning(exact_raw)
+    limit_note = f"  •  last {limit} sales" if limit is not None else ""
+    date_note = f"  •  {date_span}d span ({oldest_dt.strftime('%d %b')} → {newest_dt.strftime('%d %b')})"
+    sub = f"-# {n_clean} sales analysed (outliers excluded){limit_note}{date_note}\n-# ⚠️ Prices may vary — we don't guarantee accuracy"
+
+    # ── Main stats ────────────────────────────────────────────────────────────
     market_text = (
-        f"**💵 What to sell / bid for**\n"
-        f"{REPLY} **Target price:** `{_fmt(p_median)}` ← median\n"
-        f"{REPLY} **Typical range:** `{_fmt(p25)}` – `{_fmt(p75)}`  "
-        f"_({_confidence(n)})_"
+        f"**💵 Typical Price Range**\n"
+        f"{REPLY} **25th–75th percentile:** `{_fmt(p25)}` – `{_fmt(p75)}`  "
+        f"_({_confidence(n_clean)})_\n"
+        f"{REPLY} **Median (midpoint):** `{_fmt(p_median)}`  ← suggested start\n"
+        f"{REPLY} **Mean (average):** `{_fmt(p_avg)}`"
     )
 
     stats_text = (
-        f"**📊 Stats** _(outliers excluded)_\n"
-        f"{REPLY} Avg `{_fmt(p_avg)}`  •  "
-        f"Low `{_fmt(p_min)}`  •  "
-        f"High `{_fmt(p_max)}`  •  "
-        f"Std Dev `{_fmt(p_std)}`\n"
-        f"{REPLY} Total sales: `{len(exact_raw):,}`"
-        + (f"  •  Outliers excluded: `{len(exact_outliers)}`" if exact_outliers else "")
+        f"**📊 Full Stats** _(outliers excluded, n={n_clean})_\n"
+        f"{REPLY} Low: `{_fmt(p_min)}`  •  High: `{_fmt(p_max)}`  •  Spread: `{_fmt(p_max - p_min)}`\n"
+        f"{REPLY} Std Dev: `{_fmt(p_std)}`  _(higher = less stable)_\n"
+        f"{REPLY} Total sales processed: `{n_total:,}`"
+        + (f"  •  Excluded: `{len(exact_outliers)}` outlier(s)" if exact_outliers else "")
     )
 
     recent_text = (
         f"**🕐 Recent Sales**"
-        + (" _(⚠️ = outlier)_" if any("⚠️" in l for l in recent_lines) else "")
+        + (" _(⚠️ = outlier, excluded from stats)_" if any("⚠️" in l for l in recent_lines) else "")
         + "\n"
         + ("\n".join(recent_lines) if recent_lines else f"{REPLY} _No recent sales_")
-    )
-
-    premium_text = (
-        f"**⚡ Attribute Premiums**  "
-        f"_-# median difference vs without  •  min {MIN_PREMIUM_SAMPLE} sales each_\n"
-        + ("\n".join(premiums) if premiums else f"{REPLY} _Not enough data_")
     )
 
     filters_display = filters_str.strip() or "no filters"
@@ -421,15 +416,19 @@ def _analyse(
         discord.ui.TextDisplay(content=title),
         discord.ui.TextDisplay(content=sub),
         discord.ui.TextDisplay(content=f"-# Filters: `{filters_display}`"),
+    ]
+
+    if age_warning:
+        main_comps.append(discord.ui.TextDisplay(content=age_warning))
+
+    main_comps.extend([
         discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
         discord.ui.TextDisplay(content=market_text),
         discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
         discord.ui.TextDisplay(content=stats_text),
         discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
         discord.ui.TextDisplay(content=recent_text),
-        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(content=premium_text),
-    ]
+    ])
 
     if outlier_buf:
         class PriceViewWithOutliers(discord.ui.LayoutView):
@@ -437,28 +436,35 @@ def _analyse(
             container2 = discord.ui.Container(
                 discord.ui.TextDisplay(content=(
                     f"⚠️ **{len(exact_outliers)} outlier sale(s) excluded from stats**\n"
-                    f"_These sales were far above the typical price range and would skew the numbers._"
+                    f"_▲ Overpriced — paid way more than typical. ▼ Sniped — got a bargain. "
+                    f"Both skew the numbers, so they're hidden by default._"
                 )),
-                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                discord.ui.Separator(
+                    visible=True, spacing=discord.SeparatorSpacing.small
+                ),
                 discord.ui.MediaGallery(
                     discord.MediaGalleryItem(media="attachment://outliers.png"),
                 ),
-                accent_colour=discord.Colour(0xf04747),
+                accent_colour=discord.Colour(0xef476f),
             )
+
             def __init__(self):
                 super().__init__(timeout=300)
-        return PriceViewWithOutliers(), outlier_buf
+
+        return PriceViewWithOutliers(), outlier_buf, filters_str
     else:
         class PriceView(discord.ui.LayoutView):
             container = discord.ui.Container(*main_comps, accent_colour=accent)
+
             def __init__(self):
                 super().__init__(timeout=300)
-        return PriceView(), None
+
+        return PriceView(), None, filters_str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
 # COG
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
 
 class Price(commands.Cog):
     """Smart price lookup using historical auction data"""
@@ -467,60 +473,140 @@ class Price(commands.Cog):
         self.bot = bot
 
     @commands.hybrid_command(name="price", aliases=["pc", "pricecheck"])
-    @app_commands.describe(filters="Same filters as auction search e.g: --name eevee --shiny --iv >85")
+    @app_commands.describe(
+        filters="Same filters as auction search e.g: --name eevee --shiny --iv >85 --limit 50"
+    )
     async def price_cmd(self, ctx: commands.Context, *, filters: str = ""):
         """
         Price check a Pokémon using historical auction data.
 
-        Examples:
+        **Features:**
+          • Shows price range (25th–75th percentile) + median
+          • Analyzes last 20-30 auctions by default
+          • Removes outliers (overpriced/sniped sales)
+          • Warns if data is too old
+          • Full filter support — same as /graph and /auction search
+          • Link to /graph for detailed price history
+
+        **Examples:**
           j!price --name garchomp --iv 90
           j!price --name eevee --shiny
-          j!price --name charizard --gmax --iv >85
+          j!price --name charizard --gmax --iv >85 --limit 50
           j!price --name umbreon --move wish
-          j!price --name dragonite --limit 50
+          j!price --name dragonite --type flying
+
+        **Tips:**
+          • Use `--limit 50` to check more (or fewer) recent auctions
+          • `--limit 100` for deeper analysis, `--limit 10` for quick check
+          • Default is 25 auctions; raises warning if data is >30 days old
+          • All `/graph` and `/auction search` filters supported
         """
         if not any(t in _NAME_FLAGS for t in (filters.split() if filters else [])):
             await ctx.send(
                 view=_error_view(
                     f"❌ Please specify a Pokémon name.\n"
                     f"{REPLY} Example: `j!price --name garchomp --iv 90`\n"
-                    f"{REPLY} Example: `j!price --name eevee --shiny`"
+                    f"{REPLY} Example: `j!price --name eevee --shiny --limit 50`\n"
+                    f"{REPLY} Use `j!help price` for all options."
                 ),
                 reference=ctx.message,
                 mention_author=False,
             )
             return
 
-        raw             = filters.split() if filters else []
+        raw = filters.split() if filters else []
         query, _, limit = build_query(raw, expand_name_by_dex=True)
+
+        # Validate and cap limit
+        if limit is None:
+            limit = DEFAULT_LIMIT
+        else:
+            limit = min(limit, MAX_LIMIT)
 
         if hasattr(ctx, "interaction") and ctx.interaction:
             await ctx.defer()
         else:
             await ctx.typing()
 
-        view, outlier_buf = _analyse(query, filters, limit=limit)
+        view, outlier_buf, graph_filters = _analyse(query, filters, limit=limit)
 
-        ref = ctx.message if not (hasattr(ctx, "interaction") and ctx.interaction) else None
+        ref = (
+            ctx.message
+            if not (hasattr(ctx, "interaction") and ctx.interaction)
+            else None
+        )
+
+        # Build button row
+        class PriceViewWithButtons(discord.ui.LayoutView):
+            def __init__(self, base_view: discord.ui.LayoutView):
+                super().__init__(timeout=300)
+                # Copy containers from base view
+                for attr in dir(base_view):
+                    if attr.startswith("container") or attr.startswith("action_row"):
+                        setattr(self, attr, getattr(base_view, attr))
+
+            action_row = discord.ui.ActionRow()
+
+            async def on_ready(self):
+                """Populate action row after containers are set."""
+                pass
+
+        # Create button for graph
+        class ViewGraphBtn(discord.ui.Button):
+            def __init__(self, graph_filters_str: str):
+                super().__init__(
+                    style=discord.ButtonStyle.primary,
+                    label="📈 View Detailed Graph",
+                    custom_id="pc_view_graph",
+                )
+                self.graph_filters = graph_filters_str
+
+            async def callback(self, interaction: discord.Interaction):
+                # Use the same filters but direct them to /graph
+                await interaction.response.send_message(
+                    content=(
+                        f"Use this command to see the detailed price history graph:\n"
+                        f"`j!graph {self.graph_filters}`"
+                    ),
+                    ephemeral=True,
+                )
+
+        btn_list = [ViewGraphBtn(graph_filters)]
+
+        # If we have outliers, add a button to view them
+        if outlier_buf:
+            outlier_buf.seek(0)
+
+        # Create custom view with buttons
+        base_view_class = type(view)
+        
+        class EnhancedPriceView(base_view_class):
+            def __init__(self):
+                super().__init__(timeout=300)
+                # Add action row with button
+                self.action_row = discord.ui.ActionRow(*btn_list)
+
+        enhanced_view = EnhancedPriceView()
 
         if outlier_buf:
+            outlier_buf.seek(0)
             await ctx.send(
-                view=view,
+                view=enhanced_view,
                 file=discord.File(outlier_buf, filename="outliers.png"),
                 reference=ref,
                 mention_author=False,
             )
         else:
             await ctx.send(
-                view=view,
+                view=enhanced_view,
                 reference=ref,
                 mention_author=False,
             )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
 # SETUP
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Price(bot))
