@@ -448,16 +448,10 @@ def _analyse(
                 accent_colour=discord.Colour(0xef476f),
             )
 
-            def __init__(self):
-                super().__init__(timeout=300)
-
         return PriceViewWithOutliers(), outlier_buf, filters_str
     else:
         class PriceView(discord.ui.LayoutView):
             container = discord.ui.Container(*main_comps, accent_colour=accent)
-
-            def __init__(self):
-                super().__init__(timeout=300)
 
         return PriceView(), None, filters_str
 
@@ -465,6 +459,26 @@ def _analyse(
 # ──────────────────────────────────────────────────────────────────
 # COG
 # ──────────────────────────────────────────────────────────────────
+
+class ViewGraphBtn(discord.ui.Button):
+    """Button to show /graph command suggestion."""
+    def __init__(self, graph_filters_str: str):
+        super().__init__(
+            style=discord.ButtonStyle.primary,
+            label="📈 View Detailed Graph",
+            custom_id="pc_view_graph",
+        )
+        self.graph_filters = graph_filters_str
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            content=(
+                f"Use this command to see the detailed price history graph:\n"
+                f"`j!graph {self.graph_filters}`"
+            ),
+            ephemeral=True,
+        )
+
 
 class Price(commands.Cog):
     """Smart price lookup using historical auction data"""
@@ -536,57 +550,12 @@ class Price(commands.Cog):
             else None
         )
 
-        # Build button row
-        class PriceViewWithButtons(discord.ui.LayoutView):
-            def __init__(self, base_view: discord.ui.LayoutView):
-                super().__init__(timeout=300)
-                # Copy containers from base view
-                for attr in dir(base_view):
-                    if attr.startswith("container") or attr.startswith("action_row"):
-                        setattr(self, attr, getattr(base_view, attr))
+        # Add button to view
+        class PriceViewWithButton(type(view)):
+            action_row = discord.ui.ActionRow(ViewGraphBtn(graph_filters))
 
-            action_row = discord.ui.ActionRow()
-
-            async def on_ready(self):
-                """Populate action row after containers are set."""
-                pass
-
-        # Create button for graph
-        class ViewGraphBtn(discord.ui.Button):
-            def __init__(self, graph_filters_str: str):
-                super().__init__(
-                    style=discord.ButtonStyle.primary,
-                    label="📈 View Detailed Graph",
-                    custom_id="pc_view_graph",
-                )
-                self.graph_filters = graph_filters_str
-
-            async def callback(self, interaction: discord.Interaction):
-                # Use the same filters but direct them to /graph
-                await interaction.response.send_message(
-                    content=(
-                        f"Use this command to see the detailed price history graph:\n"
-                        f"`j!graph {self.graph_filters}`"
-                    ),
-                    ephemeral=True,
-                )
-
-        btn_list = [ViewGraphBtn(graph_filters)]
-
-        # If we have outliers, add a button to view them
-        if outlier_buf:
-            outlier_buf.seek(0)
-
-        # Create custom view with buttons
-        base_view_class = type(view)
-        
-        class EnhancedPriceView(base_view_class):
-            def __init__(self):
-                super().__init__(timeout=300)
-                # Add action row with button
-                self.action_row = discord.ui.ActionRow(*btn_list)
-
-        enhanced_view = EnhancedPriceView()
+        # Instantiate the enhanced view
+        enhanced_view = PriceViewWithButton()
 
         if outlier_buf:
             outlier_buf.seek(0)
