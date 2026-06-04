@@ -10,6 +10,8 @@ Field mapping (DB short name → meaning):
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import io
 from datetime import datetime, timezone
 
@@ -518,18 +520,18 @@ def build_graph(
     alltime: bool = False,
     show_outliers: bool = False,
     pokemon_name: str | None = None,
-) -> tuple[io.BytesIO, list, int]:
+) -> tuple[io.BytesIO, list, int, int]:
     """
-    Build a dark-themed price history chart and return (buf, outliers, fetched_count).
-    fetched_count is the number of records received before subsampling — use it in
-    subtitles so users can distinguish "fetched from DB" from "plotted dots".
+    Build a dark-themed price history chart and return (buf, outliers, fetched_count, plotted_count).
+    fetched_count is the number of records received before subsampling.
+    plotted_count is the number of records after subsampling (actual dots on the graph).
     Records use short field names: ts = unix_timestamp, bid = winning_bid, pn = pokemon_name.
     If pokemon_name is provided it is used as the chart title instead of the DB's pn field
     (which can be a form name like 'Snowman Pikachu' even when the user asked for 'pikachu').
     """
     records = sorted(records, key=lambda r: r.get("ts", 0))
 
-    # ── Capture fetched count BEFORE subsampling (used in subtitle) ────────────
+    # ── Capture fetched count BEFORE subsampling ───────────────────────────────
     fetched_count = len(records)
 
     # ── Capture true all-time min/max from the FULL dataset BEFORE subsampling ──
@@ -541,6 +543,9 @@ def build_graph(
     if len(records) > MAX_POINTS:
         step    = len(records) // MAX_POINTS
         records = records[::step]
+
+    # ── Capture plotted count AFTER subsampling ────────────────────────────────
+    plotted_count = len(records)
 
     # Short field names: ts, bid, pn
     dates  = [datetime.fromtimestamp(r["ts"], tz=timezone.utc) for r in records]
@@ -891,7 +896,7 @@ def build_graph(
     plt.close(fig)
     buf.seek(0)
     # Each outlier entry: (date, price, record, kind) — kind is "high" or "low"
-    return buf, list(zip(outlier_dates, outlier_prices.tolist(), outlier_records, outlier_kinds)), fetched_count
+    return buf, list(zip(outlier_dates, outlier_prices.tolist(), outlier_records, outlier_kinds)), fetched_count, plotted_count
 
 
 def build_outlier_image(
@@ -1156,10 +1161,10 @@ class Graph(commands.Cog):
             "aid": 1, "lv":  1,
         }
 
-        def _fetch(q: dict, lim: int | None = None) -> tuple[list[dict], bool]:
+        def _fetch_sync(q: dict, lim: int | None = None) -> tuple[list[dict], bool]:
             """
-            Fetch records capped at MAX_FETCH. User --limit is honoured but
-            cannot exceed MAX_FETCH. Returns (records, was_capped).
+            Synchronous MongoDB fetch — always called via _fetch() so it
+            never blocks the asyncio event loop directly.
             """
             fetch_n = min(lim, MAX_FETCH) if lim is not None else MAX_FETCH
             # +1 lets us detect whether more records exist beyond the cap
@@ -1173,6 +1178,14 @@ class Graph(commands.Cog):
                 recs = recs[:fetch_n]
             recs.sort(key=lambda r: r.get("ts", 0))
             return recs, capped
+
+        async def _fetch(q: dict, lim: int | None = None) -> tuple[list[dict], bool]:
+            """
+            Async wrapper: offloads the blocking PyMongo call to a thread-pool
+            executor so the Discord event loop (and its heartbeat) are never blocked.
+            """
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, functools.partial(_fetch_sync, q, lim))
 
         _was_capped = False  # set to True if any _fetch call hits MAX_FETCH
 
@@ -1388,7 +1401,7 @@ class Graph(commands.Cog):
                 )
                 return
 
-            primary_records, _primary_capped = _fetch(query)
+            primary_records, _primary_capped = await _fetch(query)
             if not primary_records:
                 await ctx.send(
                     view=_error_view("❌ No auctions found for the primary Pokémon."),
@@ -1404,7 +1417,7 @@ class Graph(commands.Cog):
                 _variant_flags = [t for t in raw_no_names if t in ("--sh", "--shiny", "--gmax", "--noshiny")]
                 craw = ["--name", cname] + _variant_flags
                 cquery, _, _ = build_query(craw, expand_name_by_dex=True)
-                crecs, _ = _fetch(cquery)
+                crecs, _ = await _fetch(cquery)
                 if not crecs:
                     await ctx.send(
                         view=_error_view(f"❌ No auctions found for `{cname}` — skipping."),
@@ -1471,7 +1484,7 @@ class Graph(commands.Cog):
             for mname in multi_names:
                 mraw              = ["--name", mname] + _variant_flags
                 mquery, _, mlimit = build_query(mraw, expand_name_by_dex=True)
-                mrecs, _mc        = _fetch(mquery, mlimit)
+                mrecs, _mc        = await _fetch(mquery, mlimit)
                 if _mc: _was_capped = True
                 if mrecs:
                     _merged_records.extend(mrecs)
@@ -1505,7 +1518,7 @@ class Graph(commands.Cog):
             _first_mquery, _, _      = build_query(_first_mraw, expand_name_by_dex=True)
 
             try:
-                buf, outliers, _fetched_count = build_graph(
+                buf, outliers, _fetched_count, _plotted_count = build_graph(
                     _merged_records, _first_mquery, display_str,
                     alltime=use_alltime,
                     show_outliers=use_outliers,
@@ -1526,7 +1539,6 @@ class Graph(commands.Cog):
             disc_tag        = _DISCORD_TAG[variant]
             accent          = config.SHINY_EMBED_COLOR if variant == "shiny" else config.EMBED_COLOR
             heading         = f"## {disc_tag} {multi_name} — Price History".strip()
-            _plotted_count  = total  # after subsampling inside build_graph
             _cap_note       = " (capped)" if _was_capped else ""
             alltime_badge   = "  •  🕐 All-time" if use_alltime else ""
             since_badge     = f"  •  📅 Since {since_dt.strftime('%b %Y')}" if since_dt else ""
@@ -1547,14 +1559,14 @@ class Graph(commands.Cog):
                 for mname in multi_names:
                     mraw2             = ["--name", mname] + _variant_flags
                     mq2, _, ml2       = build_query(mraw2, expand_name_by_dex=True)
-                    _mr, _ = _fetch(mq2, ml2)
+                    _mr, _ = await _fetch(mq2, ml2)
                     new_recs.extend(_mr)
                     del _mr
                 if not new_recs:
                     await interaction.followup.send("❌ No data found.", ephemeral=True)
                     return
                 try:
-                    new_buf, new_outlier_data, _new_fetched = build_graph(
+                    new_buf, new_outlier_data, _new_fetched, _new_plotted = build_graph(
                         new_recs, _first_mquery, display_str,
                         alltime=new_alltime,
                         show_outliers=new_outliers,
@@ -1567,7 +1579,7 @@ class Graph(commands.Cog):
                 new_ob_bytes      = build_outlier_image(new_outlier_data, multi_name, variant) if new_outlier_data else None
                 new_alltime_b     = "  •  🕐 All-time" if new_alltime else ""
                 new_outliers_b    = "  •  ⚠️ Raw data (all outliers included)" if new_outliers else ""
-                new_sub           = f"_{_new_fetched:,} fetched  •  {len(new_recs):,} plotted  •  {len(_found_names)} Pokémon{new_alltime_b}{since_badge}{before_badge}{new_outliers_b}  •  filters: `{display_str}`_"
+                new_sub           = f"_{_new_fetched:,} fetched  •  {_new_plotted:,} plotted  •  {len(_found_names)} Pokémon{new_alltime_b}{since_badge}{before_badge}{new_outliers_b}  •  filters: `{display_str}`_"
                 new_btn_list      = _build_btn_list(
                     legend_text=_legend_text,
                     filters_text=_filters_body,
@@ -1669,7 +1681,7 @@ class Graph(commands.Cog):
             query, _, limit = build_query(list(raw_no_names), expand_name_by_dex=True)
             _requested_name = None   # computed after fetch from actual data
 
-        records, _was_capped = _fetch(query, limit)
+        records, _was_capped = await _fetch(query, limit)
 
         if not records:
             await ctx.send(
@@ -1704,7 +1716,7 @@ class Graph(commands.Cog):
                 _requested_name = f"{n_unique} Pokémon"
 
         try:
-            buf, outliers, _fetched_count = build_graph(
+            buf, outliers, _fetched_count, _plotted_count = build_graph(
                 records, query, display_str,
                 alltime=use_alltime,
                 show_outliers=use_outliers,
@@ -1727,7 +1739,6 @@ class Graph(commands.Cog):
         accent    = config.SHINY_EMBED_COLOR if variant == "shiny" else config.EMBED_COLOR
 
         heading         = f"## {disc_tag} {name} — Price History".strip()
-        _plotted_count  = total  # len(records) after subsampling inside build_graph
         _cap_note       = " (capped)" if _was_capped else ""
         alltime_badge   = "  •  🕐 All-time" if use_alltime else ""
         since_badge     = f"  •  📅 Since {since_dt.strftime('%b %Y')}" if since_dt else ""
@@ -1766,14 +1777,14 @@ class Graph(commands.Cog):
 
             new_ts = _build_ts_filter(new_alltime, _since_cap, _before_cap)
             _regen_q = {**_query_cap, "ts": new_ts}
-            new_records, _regen_capped = _fetch(_regen_q, _limit_cap)
+            new_records, _regen_capped = await _fetch(_regen_q, _limit_cap)
 
             if not new_records:
                 await interaction.followup.send("❌ No data found.", ephemeral=True)
                 return
 
             try:
-                new_buf, new_out, _new_fetched = build_graph(
+                new_buf, new_out, _new_fetched, _new_plotted = build_graph(
                     new_records, _query_cap, _display_cap,
                     alltime=new_alltime,
                     show_outliers=new_outliers,
@@ -1794,7 +1805,7 @@ class Graph(commands.Cog):
             out_badge_n     = "  •  ⚠️ Raw data" if new_outliers else ""
             _regen_cap_note = " (capped)" if _regen_capped else ""
             new_sub         = (
-                f"_{_new_fetched:,} fetched{_regen_cap_note}  •  {len(new_records):,} plotted"
+                f"_{_new_fetched:,} fetched{_regen_cap_note}  •  {_new_plotted:,} plotted"
                 f"{alltime_badge_n}{since_badge_n}{before_badge_n}{out_badge_n}  •  filters: `{_display_cap}`_"
             )
 
