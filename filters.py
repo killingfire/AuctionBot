@@ -248,7 +248,7 @@ FLAG_DEFINITIONS: dict[str, dict] = {
         "aliases":     ["--orderby", "--order", "--or"],
         "takes_arg":   True,
         "multi":       False,
-        "help": "Sort: iv+/iv- | bid+/bid- | level+/level- | date+/date- | id+/id- (default: date-)",
+        "help": "Sort: iv+/iv- | bid+/bid-/price+/price- | level+/level- | date+/date- | id+/id- (default: date-)",
         "mongo_field": None,
     },
 
@@ -293,6 +293,15 @@ FLAG_DEFINITIONS: dict[str, dict] = {
         "multi":       False,
         "help":        "Show only Pokémon in the same evo family as the given name",
         "mongo_field": None,
+    },
+
+    # ── Spawn rate ────────────────────────────────────────────────────────────
+    "--spawnrate": {
+        "aliases":     ["--sr", "--spawn_rate", "--spawn"],
+        "takes_arg":   True,
+        "multi":       False,
+        "help":        "Filter by Pokétwo spawn rate (e.g. --sr 1/225, --sr 225, --sr 1/337)",
+        "mongo_field": None,   # handled specially in build_query / graph
     },
 
     # ── Limit ─────────────────────────────────────────────────────────────────
