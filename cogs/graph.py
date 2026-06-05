@@ -1407,12 +1407,18 @@ class Graph(commands.Cog):
                             label=_label,
                             custom_id="g_outlier_detail",
                         )
-                        self._ob = _ob
+                        # Store raw bytes so the button remains usable even after
+                        # the original BytesIO is closed post-send.
+                        self._ob_bytes = _ob.getvalue() if _ob is not None else None
                         self._oc = _oc
                     async def callback(self, interaction: discord.Interaction):
-                        if self._ob:
-                            self._ob.seek(0)
-                        out_f = discord.File(self._ob, filename="outliers.png")
+                        if not self._ob_bytes:
+                            await interaction.response.send_message(
+                                "❌ Outlier image unavailable.", ephemeral=True
+                            )
+                            return
+                        # Reconstruct a fresh BytesIO on every click — always seekable.
+                        out_f = discord.File(io.BytesIO(self._ob_bytes), filename="outliers.png")
                         _oc   = self._oc
                         class OutlierView(discord.ui.LayoutView):
                             c = discord.ui.Container(
