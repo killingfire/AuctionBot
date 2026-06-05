@@ -1501,9 +1501,14 @@ def _build_compare_modal(col, fetch_fn) -> type[discord.ui.Modal]:
                         if not files:
                             await intr.response.send_message("❌ No outlier data.", ephemeral=True)
                             return
-                        # Discord allows up to 10 attachments; cap to be safe
+                        total_files = len(files)
                         files = files[:10]
-                        content_text = "📋 **Excluded sales per series:**\n" + "\n".join(lines)
+                        lines = lines[:len(files)]
+                        trunc_note = (
+                            f"\n_⚠️ Showing {len(files)} of {total_files} images (Discord limit of 10 attachments)._"
+                            if total_files > 10 else ""
+                        )
+                        content_text = "📋 **Excluded sales per series:**\n" + "\n".join(lines) + trunc_note
                         class _OvView(discord.ui.LayoutView):
                             container = discord.ui.Container(
                                 discord.ui.TextDisplay(content=content_text),
@@ -1922,21 +1927,30 @@ class Graph(commands.Cog):
                                 "❌ Outlier image unavailable.", ephemeral=True
                             )
                             return
-                        _oc      = self._oc
-                        n_pages  = len(self._ob_pages)
-                        files    = [
+                        _oc        = self._oc
+                        n_pages    = len(self._ob_pages)
+                        DISCORD_MAX_ATTACHMENTS = 10
+                        truncated  = n_pages > DISCORD_MAX_ATTACHMENTS
+                        pages_sent = self._ob_pages[:DISCORD_MAX_ATTACHMENTS]
+                        files      = [
                             discord.File(
                                 io.BytesIO(page),
                                 filename=f"outliers_p{i + 1}.png" if n_pages > 1 else "outliers.png",
                             )
-                            for i, page in enumerate(self._ob_pages)
+                            for i, page in enumerate(pages_sent)
                         ]
-                        page_note = f"  •  {n_pages} images" if n_pages > 1 else ""
+                        shown_rows = len(pages_sent) * OUTLIER_PAGE_SIZE
+                        trunc_note = (
+                            f"\n_⚠️ Showing first {shown_rows} of {_oc} entries ({DISCORD_MAX_ATTACHMENTS} images max)._"
+                            if truncated else ""
+                        )
+                        page_note  = f"  •  {len(files)} image(s)" if n_pages > 1 else ""
                         class OutlierView(discord.ui.LayoutView):
                             c = discord.ui.Container(
                                 discord.ui.TextDisplay(content=(
                                     f"📋 **{_oc} sale(s) excluded from the graph{page_note}**\n"
                                     f"_▲ Overpriced outliers inflate the average; ▼ sniped/underpriced sales compress the Y-axis. Both are hidden by default for a cleaner chart._"
+                                    f"{trunc_note}"
                                 )),
                                 discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
                                 *[discord.ui.MediaGallery(
