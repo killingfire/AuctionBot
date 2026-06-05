@@ -85,7 +85,7 @@ MAX_POINTS = 800
 
 # Hard cap on records pulled from MongoDB per query.
 # Prevents OOM when no name/filter is given and the entire collection matches.
-MAX_FETCH = 50_000
+MAX_FETCH = 150_000
 
 # Only include auctions from this year onwards when building graphs.
 # Change this value to shift the global cutoff.
