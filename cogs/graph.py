@@ -1317,15 +1317,48 @@ def _build_compare_modal(col, fetch_fn) -> type[discord.ui.Modal]:
                 variant = _detect_variant(query)
                 tag     = _DISCORD_TAG.get(variant, "")
 
-                if _mnames:
-                    _label = _mnames[0].title()
-                else:
-                    from collections import Counter
-                    _pn_counts = Counter(r.get("pn", "") for r in recs if r.get("pn"))
-                    _label = _pn_counts.most_common(1)[0][0] if _pn_counts else slot_str[:30]
+                # Build a label from what the user actually typed, not from
+                # whichever Pokémon happened to sell the most in the results.
+                _orig_tokens = slot_str.split()
 
-                if tag:
-                    _label = f"{tag} {_label}"
+                # Gender suffix (♂ / ♀)
+                _gender_val, _ = _extract_flag_value_multi_alias(
+                    _orig_tokens,
+                    frozenset(["--gender"] + FLAG_DEFINITIONS.get("--gender", {}).get("aliases", [])),
+                )
+                _gender_suffix = {"male": "♂", "female": "♀", "unknown": "?"}.get(
+                    (_gender_val or "").lower(), ""
+                )
+
+                # Category, spawnrate, evo — each gives a meaningful base label
+                _cat_val, _   = _extract_flag_value_multi_alias(
+                    _orig_tokens,
+                    frozenset(["--category"] + FLAG_DEFINITIONS.get("--category", {}).get("aliases", [])),
+                )
+                _sr_label, _  = _extract_flag_value_multi_alias(_orig_tokens, _SPAWNRATE_FLAGS)
+                _evo_label, _ = _extract_flag_value_multi_alias(_orig_tokens, _EVO_FLAGS)
+
+                if _mnames:
+                    base = "/".join(n.title() for n in _mnames)
+                elif _evo_label:
+                    base = f"{_evo_label.title()} line"
+                elif _cat_val:
+                    base = _cat_val.title()
+                elif _sr_label:
+                    base = f"1/{_sr_label.split('/')[-1]} rate"
+                else:
+                    # No meaningful filter to name the series — summarise unique
+                    # Pokémon in the results rather than picking one at random.
+                    unique_pn = sorted({r.get("pn", "") for r in recs if r.get("pn")})
+                    n = len(unique_pn)
+                    if n == 1:
+                        base = unique_pn[0].title()
+                    elif n <= 3:
+                        base = " / ".join(p.title() for p in unique_pn)
+                    else:
+                        base = f"{n} Pokémon"
+
+                _label = " ".join(p for p in [tag, base, _gender_suffix] if p)
 
                 series.append({"name": _label, "records": recs, "variant": variant,
                                "since_dt": _since_dt, "before_dt": _before_dt})
